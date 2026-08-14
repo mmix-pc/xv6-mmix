@@ -101,3 +101,14 @@ mmix_early_print_boot(const struct mmix_boot_state *boot)
   early_put_u64(info->virtio_mmio_count);
   mmix_early_uart_putc('\n');
 }
+
+void
+panic(char *message)
+{
+  early_puts("panic: ");
+  early_puts(message);
+  mmix_early_uart_putc('\n');
+
+  for (;;)
+    asm volatile("SWYM 0, 0, 0");
+}

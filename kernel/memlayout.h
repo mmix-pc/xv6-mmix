@@ -62,7 +62,7 @@
 #define INTC_SHARED_IRQ_LAST 15
 #define INTC_CONTEXT_COUNT 16
 
-// Phase 1 is a single-CPU port.
+// The current kernel configuration is single-CPU.
 #define BOOT_CPU_COUNT 1
 #define BOOT_CPU_ID 0
 
@@ -140,7 +140,7 @@ _Static_assert(KERNEL_LOAD == REGISTER_STACK_LIMIT,
 _Static_assert(KERNEL_LIMIT == BOOT_STACK_BASE,
                "kernel limit must stop at the bootstrap stack");
 _Static_assert(BOOT_STACK_SIZE == MMIX_PAGE_SIZE,
-               "Phase 1 must reserve exactly one bootstrap stack page");
+               "the kernel must reserve exactly one bootstrap stack page");
 _Static_assert(BOOT_STACK_TOP == LOW_RAM_END,
                "bootstrap stack must end at the top of Low RAM");
 _Static_assert(KALLOC_LIMIT <= LOW_RAM_END,

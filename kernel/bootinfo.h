@@ -64,8 +64,8 @@ enum mmix_bootinfo_status {
   MMIX_BOOTINFO_BAD_DEVICE = -6,
 };
 
-// Decoded Phase 1 platform information. Framebuffer fields are intentionally
-// omitted because the Phase 1 xv6 boot path does not consume that device.
+// Decoded platform information used by early boot. Framebuffer fields are
+// omitted because the current xv6 boot path does not consume that device.
 struct mmix_bootinfo {
   uint64 cpu_count;
   uint64 boot_cpu_id;

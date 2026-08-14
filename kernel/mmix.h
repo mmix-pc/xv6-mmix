@@ -210,6 +210,32 @@ mmix_sync_translation(void)
   asm volatile("SYNC 6" : : : "memory");
 }
 
+static inline uint64
+mmix_rk_read(void)
+{
+  uint64 value;
+
+  asm volatile("GET %0, rK" : "=r"(value));
+  return value;
+}
+
+static inline int
+mmix_intr_get(void)
+{
+  return mmix_rk_read() != 0;
+}
+
+// The current kernel keeps dynamic interrupts disabled, so only the masking
+// operation is exposed here. Trap initialization will define the eventual
+// enable policy.
+static inline void
+mmix_intr_off(void)
+{
+  uint64 disabled = 0;
+
+  asm volatile("PUT rK, %0" : : "r"(disabled) : "memory");
+}
+
 // SYNC 6 is the architectural full translation-cache invalidation. Current
 // QEMU also requires rewriting rV to flush its software TLB after a live PTE
 // change; the same sequence performs the initial transition out of flat mode.

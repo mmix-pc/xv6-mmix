@@ -5,6 +5,9 @@ OBJS = \
   $K/entry.o \
   $K/start.o \
   $K/bootinfo.o \
+  $K/cpu.o \
+  $K/early_selftest.o \
+  $K/spinlock.o \
   $K/uart.o \
   $K/early_print.o
 
