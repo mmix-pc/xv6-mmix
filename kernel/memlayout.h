@@ -69,6 +69,13 @@
 // Bootstrap physical layout within Low RAM.
 #define MMIX_PAGE_SIZE 0x0000000000002000
 
+// The kernel rV layout uses three contiguous physical root-table blocks in
+// the existing low-address guard. Indirect child tables come from kalloc.
+#define KERNEL_ROOT_BASE LOW_RAM_BASE
+#define KERNEL_ROOT_BLOCKS 3
+#define KERNEL_ROOT_SIZE (KERNEL_ROOT_BLOCKS * MMIX_PAGE_SIZE)
+#define KERNEL_ROOT_LIMIT (KERNEL_ROOT_BASE + KERNEL_ROOT_SIZE)
+
 #define REGISTER_STACK_BASE 0x0000000000010000
 #define REGISTER_STACK_LIMIT 0x0000000000100000
 
@@ -89,6 +96,12 @@
 #if !defined(__ASSEMBLER__)
 _Static_assert((MMIX_PAGE_SIZE & (MMIX_PAGE_SIZE - 1)) == 0,
                "MMIX page size must be a power of two");
+_Static_assert((KERNEL_ROOT_BASE & (MMIX_PAGE_SIZE - 1)) == 0,
+               "kernel root tables must be page-aligned");
+_Static_assert(KERNEL_ROOT_SIZE == 0x6000,
+               "kernel rV must reserve three root-table blocks");
+_Static_assert(KERNEL_ROOT_LIMIT <= REGISTER_STACK_BASE,
+               "kernel root tables must remain below the register stack");
 
 _Static_assert(LOW_RAM_END == POOL_PHYS_BASE,
                "Low RAM must end at Pool Segment backing");
