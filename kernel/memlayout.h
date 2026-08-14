@@ -87,10 +87,11 @@
 #define BOOT_STACK_SIZE MMIX_PAGE_SIZE
 #define BOOT_STACK_TOP (BOOT_STACK_BASE + BOOT_STACK_SIZE)
 
-// The linker provides kernel_end. The allocator begins at the next MMIX page
-// and stops before the bootstrap stack.
-#define KALLOC_START(kernel_end)                                             \
-  (((kernel_end) + MMIX_PAGE_SIZE - 1) & ~(MMIX_PAGE_SIZE - 1))
+// FIXME: kernel.ld provides a page-aligned kernel_end. Keep this macro as an
+// identity operation for now: the MMIX code generator otherwise folds the
+// usual round-up addition into an unaligned GETA symbol addend that the linker
+// cannot encode.
+#define KALLOC_START(kernel_end) (kernel_end)
 #define KALLOC_LIMIT BOOT_STACK_BASE
 
 #if !defined(__ASSEMBLER__)

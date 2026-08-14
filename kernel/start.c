@@ -2,6 +2,7 @@
 #include "early_print.h"
 #include "early_selftest.h"
 #include "early_uart.h"
+#include "kalloc.h"
 
 struct mmix_boot_state mmix_boot;
 
@@ -24,6 +25,7 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
 
   mmix_early_uart_init();
   mmix_early_print_boot(&mmix_boot);
+  kinit();
   mmix_early_selftest();
   mmix_wait();
 }
