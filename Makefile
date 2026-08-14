@@ -39,6 +39,15 @@ $K/kernel: $(OBJS) $K/kernel.ld
 $K/%.o: $K/%.S
 	$(CC) $(ASFLAGS) -c -o $@ $<
 
+QEMUOPTS = -machine virt
+QEMUOPTS += -smp 1
+QEMUOPTS += -display none
+QEMUOPTS += -serial stdio
+QEMUOPTS += -monitor none
+
+qemu: $K/kernel
+	$(QEMU) $(QEMUOPTS) -kernel $K/kernel
+
 tags: $(OBJS)
 	etags kernel/*.S kernel/*.c
 
@@ -105,6 +114,6 @@ clean:
         $U/usys.S \
 	$(UPROGS)
 
-.PHONY: fmt
+.PHONY: qemu fmt
 fmt:
 	clang-format -i $(wildcard kernel/*.[ch] user/*.[ch] mkfs/*.c)
