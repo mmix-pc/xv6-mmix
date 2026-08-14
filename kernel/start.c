@@ -1,4 +1,6 @@
 #include "boot.h"
+#include "early_print.h"
+#include "early_uart.h"
 
 struct mmix_boot_state mmix_boot;
 
@@ -20,5 +22,7 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
   mmix_boot.bootinfo_status =
       mmix_bootinfo_decode(startup_cpu_id, bootinfo_pa, &mmix_boot.info);
 
+  mmix_early_uart_init();
+  mmix_early_print_boot(&mmix_boot);
   mmix_wait();
 }
