@@ -4,39 +4,14 @@ U=user
 OBJS = \
   $K/entry.o \
   $K/start.o \
-  $K/console.o \
-  $K/printk.o \
+  $K/bootinfo.o \
   $K/uart.o \
-  $K/kalloc.o \
-  $K/spinlock.o \
-  $K/string.o \
-  $K/main.o \
-  $K/vm.o \
-  $K/proc.o \
-  $K/swtch.o \
-  $K/trampoline.o \
-  $K/trap.o \
-  $K/syscall.o \
-  $K/sysproc.o \
-  $K/bio.o \
-  $K/fs.o \
-  $K/log.o \
-  $K/sleeplock.o \
-  $K/file.o \
-  $K/pipe.o \
-  $K/exec.o \
-  $K/sysfile.o \
-  $K/kernelvec.o \
-  $K/plic.o \
-  $K/virtio_disk.o
+  $K/early_print.o
 
 CC = clang
+LD = ld.lld
 OBJDUMP = llvm-objdump
 QEMU = qemu-system-mmix
-
-# The MMIX linker is not ready. A caller may provide LD explicitly once a
-# suitable linker is available; compile-only work must not depend on it.
-LD = $(error MMIX linker is not configured; set LD explicitly)
 
 CFLAGS = -Wall -Werror -Wno-unknown-attributes -O0 -fno-omit-frame-pointer
 CFLAGS += --target=mmix
@@ -54,7 +29,7 @@ CFLAGS += -fno-builtin-printf -fno-builtin-fprintf -fno-builtin-vprintf
 CFLAGS += -I.
 
 ASFLAGS = --target=mmix
-LDFLAGS =
+LDFLAGS = -m elf64mmix
 
 $K/kernel: $(OBJS) $K/kernel.ld
 	$(LD) $(LDFLAGS) -T $K/kernel.ld -o $K/kernel $(OBJS) 

@@ -156,6 +156,32 @@ mmix_bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
   if (!valid_devices(&info))
     return MMIX_BOOTINFO_BAD_DEVICE;
 
-  *decoded = info;
+  // At -O0, a structure assignment may require unavailable memcpy.
+  decoded->cpu_count = info.cpu_count;
+  decoded->boot_cpu_id = info.boot_cpu_id;
+  decoded->ram_base = info.ram_base;
+  decoded->ram_size = info.ram_size;
+  decoded->low_ram_base = info.low_ram_base;
+  decoded->low_ram_size = info.low_ram_size;
+  decoded->pool_logical_base = info.pool_logical_base;
+  decoded->pool_phys_base = info.pool_phys_base;
+  decoded->pool_size = info.pool_size;
+  decoded->data_logical_base = info.data_logical_base;
+  decoded->data_phys_base = info.data_phys_base;
+  decoded->data_size = info.data_size;
+  decoded->stack_logical_base = info.stack_logical_base;
+  decoded->stack_phys_base = info.stack_phys_base;
+  decoded->stack_size = info.stack_size;
+  decoded->mmio_base = info.mmio_base;
+  decoded->uart_base = info.uart_base;
+  decoded->uart_irq = info.uart_irq;
+  decoded->timer_base = info.timer_base;
+  decoded->timer_irq_base = info.timer_irq_base;
+  decoded->timer_irq_count = info.timer_irq_count;
+  decoded->intc_base = info.intc_base;
+  decoded->intc_irq_count = info.intc_irq_count;
+  decoded->virtio_mmio_base = info.virtio_mmio_base;
+  decoded->virtio_mmio_irq = info.virtio_mmio_irq;
+  decoded->virtio_mmio_count = info.virtio_mmio_count;
   return MMIX_BOOTINFO_OK;
 }
