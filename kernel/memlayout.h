@@ -1,63 +1,139 @@
-// Physical memory layout
+#ifndef XV6_MMIX_MEMLAYOUT_H
+#define XV6_MMIX_MEMLAYOUT_H
 
-// qemu -machine virt is set up like this,
-// based on qemu's hw/riscv/virt.c:
-//
-// 00001000 -- boot ROM, provided by qemu
-// 02000000 -- CLINT
-// 0C000000 -- PLIC
-// 10000000 -- uart0
-// 10001000 -- virtio disk
-// 80000000 -- qemu's boot ROM loads the kernel here,
-//             then jumps here.
-// unused RAM after 80000000.
+// QEMU MMIX virt physical memory map. Intervals are half-open.
+#define LOW_RAM_BASE 0x0000000000000000
+#define LOW_RAM_SIZE 0x0000000006000000
+#define LOW_RAM_END (LOW_RAM_BASE + LOW_RAM_SIZE)
 
-// the kernel uses physical memory thus:
-// 80000000 -- entry.S, then kernel text and data
-// end -- start of kernel page allocation area
-// PHYSTOP -- end RAM used by the kernel
+#define POOL_LOGICAL_BASE 0x4000000000000000
+#define POOL_PHYS_BASE 0x0000000006000000
+#define POOL_SIZE 0x0000000000800000
+#define POOL_PHYS_END (POOL_PHYS_BASE + POOL_SIZE)
 
-// qemu puts UART registers here in physical memory.
-#define UART0     0x10000000L
-#define UART0_IRQ 10
+#define DATA_LOGICAL_BASE 0x2000000000000000
+#define DATA_PHYS_BASE 0x0000000006800000
+#define DATA_SIZE 0x0000000004000000
+#define DATA_PHYS_END (DATA_PHYS_BASE + DATA_SIZE)
 
-// virtio mmio interface
-#define VIRTIO0     0x10001000
-#define VIRTIO0_IRQ 1
+#define STACK_LOGICAL_BASE 0x6000000000000000
+#define STACK_PHYS_BASE 0x000000000a800000
+#define STACK_SIZE 0x0000000004000000
+#define STACK_PHYS_END (STACK_PHYS_BASE + STACK_SIZE)
 
-// core-local interrupt controller (CLINT)
-#define CLINT_BASE           0x02000000L
-#define CLINT(hart)          (CLINT_BASE + (hart) * 4)
+#define PLATFORM_RAM_BASE 0x000000000e800000
+#define PLATFORM_RAM_SIZE 0x0000000000800000
+#define PLATFORM_RAM_END (PLATFORM_RAM_BASE + PLATFORM_RAM_SIZE)
 
-// qemu puts platform-level interrupt controller (PLIC) here.
-#define PLIC                 0x0c000000L
-#define PLIC_PRIORITY        (PLIC + 0x0)
-#define PLIC_PENDING         (PLIC + 0x1000)
-#define PLIC_SENABLE(hart)   (PLIC + 0x2080 + (hart) * 0x100)
-#define PLIC_SPRIORITY(hart) (PLIC + 0x201000 + (hart) * 0x2000)
-#define PLIC_SCLAIM(hart)    (PLIC + 0x201004 + (hart) * 0x2000)
+#define BOOTINFO_BASE 0x000000000e800000
+#define BOOTINFO_SIZE 0x0000000000000130
+#define BOOTINFO_END (BOOTINFO_BASE + BOOTINFO_SIZE)
 
-// the kernel expects there to be RAM
-// for use by the kernel and user pages
-// from physical address 0x80000000 to PHYSTOP.
-#define KERNBASE 0x80000000L
-#define PHYSTOP  (KERNBASE + 128 * 1024 * 1024)
+#define FRAMEBUFFER_BASE 0x000000000f000000
+#define FRAMEBUFFER_SIZE 0x0000000001000000
+#define FRAMEBUFFER_END (FRAMEBUFFER_BASE + FRAMEBUFFER_SIZE)
 
-// map the trampoline page to the highest address,
-// in both user and kernel space.
-#define TRAMPOLINE (MAXVA - PGSIZE)
+// QEMU MMIX virt MMIO map. Device register offsets belong to each driver.
+#define MMIO_BASE 0x0000000010000000
 
-// map kernel stacks beneath the trampoline,
-// each surrounded by invalid guard pages.
-#define KSTACK(p) (TRAMPOLINE - ((p) + 1) * 2 * PGSIZE)
+#define UART0_BASE 0x0000000010000000
+#define UART0_SIZE 0x0000000000000100
+#define UART0_IRQ 1
 
-// User memory layout.
-// Address zero first:
-//   text
-//   original data and bss
-//   fixed-size stack
-//   expandable heap
-//   ...
-//   TRAPFRAME (p->trapframe, used by the trampoline)
-//   TRAMPOLINE (the same page as in the kernel)
-#define TRAPFRAME (TRAMPOLINE - PGSIZE)
+#define VIRTIO0_BASE 0x0000000010001000
+#define VIRTIO0_SIZE 0x0000000000001000
+#define VIRTIO0_IRQ 2
+#define VIRTIO_MMIO_COUNT 1
+
+#define FRAMEBUFFER_CONTROL_BASE 0x0000000010002000
+#define FRAMEBUFFER_CONTROL_SIZE 0x0000000000001000
+// Reserved by the machine ABI; QEMU does not currently connect this source.
+#define FRAMEBUFFER_IRQ 3
+
+#define TIMER_BASE 0x0000000010003000
+#define TIMER_SIZE 0x0000000000001000
+#define TIMER_IRQ_BASE 16
+#define TIMER_IRQ_COUNT 1
+
+#define INTC_BASE 0x0000000010004000
+#define INTC_SIZE 0x0000000000002000
+#define INTC_IRQ_COUNT 32
+#define INTC_SHARED_IRQ_FIRST 1
+#define INTC_SHARED_IRQ_LAST 15
+#define INTC_CONTEXT_COUNT 16
+
+// Phase 1 is a single-CPU port.
+#define BOOT_CPU_COUNT 1
+#define BOOT_CPU_ID 0
+
+// Bootstrap physical layout within Low RAM.
+#define MMIX_PAGE_SIZE 0x0000000000002000
+
+#define REGISTER_STACK_BASE 0x0000000000010000
+#define REGISTER_STACK_LIMIT 0x0000000000100000
+
+#define KERNEL_LOAD 0x0000000000100000
+#define KERNEL_ENTRY KERNEL_LOAD
+#define KERNEL_LIMIT 0x0000000005ffe000
+
+#define BOOT_STACK_BASE 0x0000000005ffe000
+#define BOOT_STACK_SIZE MMIX_PAGE_SIZE
+#define BOOT_STACK_TOP (BOOT_STACK_BASE + BOOT_STACK_SIZE)
+
+// The linker provides kernel_end. The allocator begins at the next MMIX page
+// and stops before the bootstrap stack.
+#define KALLOC_START(kernel_end)                                             \
+  (((kernel_end) + MMIX_PAGE_SIZE - 1) & ~(MMIX_PAGE_SIZE - 1))
+#define KALLOC_LIMIT BOOT_STACK_BASE
+
+#if !defined(__ASSEMBLER__)
+_Static_assert((MMIX_PAGE_SIZE & (MMIX_PAGE_SIZE - 1)) == 0,
+               "MMIX page size must be a power of two");
+
+_Static_assert(LOW_RAM_END == POOL_PHYS_BASE,
+               "Low RAM must end at Pool Segment backing");
+_Static_assert(POOL_PHYS_END == DATA_PHYS_BASE,
+               "Pool and Data Segment backing must be adjacent");
+_Static_assert(DATA_PHYS_END == STACK_PHYS_BASE,
+               "Data and Stack Segment backing must be adjacent");
+_Static_assert(STACK_PHYS_END == PLATFORM_RAM_BASE,
+               "Stack Segment backing must end at platform RAM");
+_Static_assert(PLATFORM_RAM_END == FRAMEBUFFER_BASE,
+               "platform RAM must end at the framebuffer");
+_Static_assert(FRAMEBUFFER_END == MMIO_BASE,
+               "framebuffer memory must end at MMIO");
+_Static_assert(BOOTINFO_BASE >= PLATFORM_RAM_BASE &&
+                   BOOTINFO_END <= PLATFORM_RAM_END,
+               "boot info must fit in platform RAM");
+
+_Static_assert(UART0_BASE >= MMIO_BASE &&
+                   UART0_BASE + UART0_SIZE <= VIRTIO0_BASE,
+               "UART MMIO range must not overlap VirtIO");
+_Static_assert(VIRTIO0_BASE + VIRTIO0_SIZE <= FRAMEBUFFER_CONTROL_BASE,
+               "VirtIO MMIO range must not overlap framebuffer control");
+_Static_assert(FRAMEBUFFER_CONTROL_BASE + FRAMEBUFFER_CONTROL_SIZE <=
+                   TIMER_BASE,
+               "framebuffer control must not overlap the timer");
+_Static_assert(TIMER_BASE + TIMER_SIZE <= INTC_BASE,
+               "timer MMIO range must not overlap the interrupt controller");
+
+_Static_assert((KERNEL_LOAD & (MMIX_PAGE_SIZE - 1)) == 0,
+               "kernel load address must be page-aligned");
+_Static_assert((REGISTER_STACK_BASE & 7) == 0 &&
+                   REGISTER_STACK_BASE < REGISTER_STACK_LIMIT,
+               "register-stack backing range must be valid and octa-aligned");
+_Static_assert(KERNEL_LOAD == REGISTER_STACK_LIMIT,
+               "kernel must follow the reserved register-stack range");
+_Static_assert(KERNEL_LIMIT == BOOT_STACK_BASE,
+               "kernel limit must stop at the bootstrap stack");
+_Static_assert(BOOT_STACK_SIZE == MMIX_PAGE_SIZE,
+               "Phase 1 must reserve exactly one bootstrap stack page");
+_Static_assert(BOOT_STACK_TOP == LOW_RAM_END,
+               "bootstrap stack must end at the top of Low RAM");
+_Static_assert(KALLOC_LIMIT <= LOW_RAM_END,
+               "allocator limit must remain inside Low RAM");
+_Static_assert(KALLOC_START(KERNEL_LOAD) < KALLOC_LIMIT,
+               "bootstrap allocator range must be non-empty");
+#endif
+
+#endif
