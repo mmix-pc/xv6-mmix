@@ -1,21 +1,26 @@
-        # qemu -kernel loads the kernel at 0x80000000
-        # and causes each hart (i.e. CPU) to jump there.
-        # kernel.ld causes the following code to
-        # be placed at 0x80000000.
+#include "memlayout.h"
+
 .section .text
 .global _entry
+.type _entry,@function
 _entry:
-        # set up a stack for C.
-        # stack0 is declared in start.c,
-        # with a 4096-byte stack per CPU.
-        # sp = stack0 + ((hartid + 1) * 4096)
-        la sp, stack0
-        li a0, 1024*4
-        csrr a1, mhartid
-        addi a1, a1, 1
-        mul a0, a0, a1
-        add sp, sp, a0
-        # jump to start() in start.c
-        call start
-spin:
-        j spin
+        // QEMU enters with the boot CPU ID and boot-info physical address in
+        // local registers $0 and $1. Preserve them in the Clang ABI argument
+        // registers before changing the global-register boundary.
+        OR r231, r0, 0
+        OR r232, r1, 0
+
+        // Clang reserves $231-$255 as global registers. The software stack is
+        // separate from QEMU's register-stack backing, whose rO/rS state must
+        // remain unchanged.
+        PUT rG, 231
+        SETML r254, ((BOOT_STACK_TOP >> 16) & 0xffff)
+        PUT rL, 0
+
+        // PUSHJ uses $31 as the call hole and passes the preserved QEMU values
+        // to the C boot boundary in $231 and $232.
+        PUSHJ r31, mmix_start
+
+.Lwait:
+        JMP .Lwait
+.size _entry, .-_entry
