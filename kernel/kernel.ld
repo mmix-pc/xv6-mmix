@@ -51,6 +51,9 @@ SECTIONS
          "kernel root tables overlap the register stack")
   ASSERT(kernel_text_end > 0x00100000,
          "kernel text is empty")
+  ASSERT((0x00100000 & 0xf) == 0 &&
+             kernel_text_end < 0x8000000000000000,
+         "kernel text cannot provide a negative MMIX trap alias")
   ASSERT((kernel_text_end & 0x1fff) == 0,
          "kernel text end is not page-aligned")
   ASSERT(kernel_text_end <= kernel_rodata_end,

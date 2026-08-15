@@ -79,6 +79,72 @@
 #define MMIX_KERNEL_ROOT_BLOCKS (MMIX_KERNEL_B1 - MMIX_KERNEL_B0)
 #define MMIX_SEGMENT0_LIMIT     0x0000080000000000
 
+// Kernel trap requests and masks. Program requests occupy rQ[39:32]; the
+// QEMU virt interrupt controller drives I/O request bit 8.
+#define MMIX_RQ_PROGRAM_SHIFT 32
+#define MMIX_RQ_PROGRAM_R     0x0000008000000000
+#define MMIX_RQ_PROGRAM_W     0x0000004000000000
+#define MMIX_RQ_PROGRAM_X     0x0000002000000000
+#define MMIX_RQ_PROGRAM_N     0x0000001000000000
+#define MMIX_RQ_PROGRAM_K     0x0000000800000000
+#define MMIX_RQ_PROGRAM_B     0x0000000400000000
+#define MMIX_RQ_PROGRAM_S     0x0000000200000000
+#define MMIX_RQ_PROGRAM_P     0x0000000100000000
+#define MMIX_RQ_PROGRAM_MASK  0x000000ff00000000
+#define MMIX_RQ_INTC          0x0000000000000100
+#define MMIX_RK_INTC          MMIX_RQ_INTC
+
+#define MMIX_KERNEL_PROGRAM_MASK                                      \
+  (MMIX_RQ_PROGRAM_R | MMIX_RQ_PROGRAM_W | MMIX_RQ_PROGRAM_X |       \
+   MMIX_RQ_PROGRAM_B)
+#define MMIX_KERNEL_INTC_MASK MMIX_RK_INTC
+#define MMIX_KERNEL_TRAP_MASK                                         \
+  (MMIX_KERNEL_PROGRAM_MASK | MMIX_KERNEL_INTC_MASK)
+
+// rA contains arithmetic event status in its low byte and the corresponding
+// trip enables in the next byte. Phase 1 keeps every arithmetic trip disabled.
+#define MMIX_RA_EVENT_MASK       0x00000000000000ff
+#define MMIX_RA_ENABLE_SHIFT     8
+#define MMIX_RA_TRIP_ENABLE_MASK 0x000000000000ff00
+
+// A negative rXX selects the resume-next form used by forced and external
+// dynamic traps.
+#define MMIX_DYNAMIC_TRAP_RESUME_NEXT 0x8000000000000000
+
+// Assembly-visible kernel trap-state layout. Global register offsets are
+// computed from their architectural register numbers.
+#define MMIX_TRAP_GLOBAL_FIRST 231
+#define MMIX_TRAP_GLOBAL_LAST  254
+#define MMIX_TRAP_GLOBAL_COUNT                                               \
+  (MMIX_TRAP_GLOBAL_LAST - MMIX_TRAP_GLOBAL_FIRST + 1)
+#define MMIX_TRAP_GLOBAL_OFFSET(reg)                                         \
+  (((reg) - MMIX_TRAP_GLOBAL_FIRST) * 8)
+
+#define MMIX_TRAP_RJ_OFFSET         192
+#define MMIX_TRAP_RBB_OFFSET        200
+#define MMIX_TRAP_RWW_OFFSET        208
+#define MMIX_TRAP_RXX_OFFSET        216
+#define MMIX_TRAP_RYY_OFFSET        224
+#define MMIX_TRAP_RZZ_OFFSET        232
+#define MMIX_TRAP_RQ_OFFSET         240
+#define MMIX_TRAP_RESTORE_RK_OFFSET 248
+#define MMIX_TRAP_RG_OFFSET         256
+#define MMIX_TRAP_RL_OFFSET         264
+#define MMIX_TRAP_RO_OFFSET         272
+#define MMIX_TRAP_RS_OFFSET         280
+#define MMIX_TRAP_RA_OFFSET         288
+#define MMIX_TRAP_RD_OFFSET         296
+#define MMIX_TRAP_RE_OFFSET         304
+#define MMIX_TRAP_RH_OFFSET         312
+#define MMIX_TRAP_RM_OFFSET         320
+#define MMIX_TRAP_RR_OFFSET         328
+#define MMIX_TRAP_RP_OFFSET         336
+#define MMIX_TRAP_RF_OFFSET         344
+#define MMIX_TRAP_STATE_SIZE        352
+#define MMIX_TRAP_STATE_ALIGN       8
+
+#define MMIX_TRAP_VECTOR_ALIGN 16
+
 #if !defined(__ASSEMBLER__)
 
 #include "types.h"
@@ -95,6 +161,30 @@
    ((uint64)(f) & MMIX_RV_F_VALUE_MASK))
 
 typedef uint64 pte_t;
+
+struct mmix_trap_state {
+  uint64 globals[MMIX_TRAP_GLOBAL_COUNT];
+  uint64 rj;
+  uint64 rbb;
+  uint64 rww;
+  uint64 rxx;
+  uint64 ryy;
+  uint64 rzz;
+  uint64 rq;
+  uint64 restore_rk;
+  uint64 rg;
+  uint64 rl;
+  uint64 ro;
+  uint64 rs;
+  uint64 ra;
+  uint64 rd;
+  uint64 re;
+  uint64 rh;
+  uint64 rm;
+  uint64 rr;
+  uint64 rp;
+  uint64 rf;
+};
 
 // MMIX page tables are described by rV, not by an Sv39-style root-page
 // pointer. The root physical address, segment spans, page size, and address
@@ -136,6 +226,21 @@ static inline uint64
 mmix_phys_alias(uint64 pa)
 {
   return MMIX_PHYSICAL_ALIAS_BIT | pa;
+}
+
+// Validate a linked positive trap entry before converting it to the
+// privileged negative physical alias required by rT and rTT.
+static inline int
+mmix_trap_vector_make(uint64 entry, uint64 text_end, uint64 *vector)
+{
+  if (vector == 0 || text_end <= KERNEL_LOAD || text_end > KERNEL_LIMIT ||
+      entry < KERNEL_LOAD || entry >= text_end ||
+      (entry & (MMIX_TRAP_VECTOR_ALIGN - 1)) != 0 ||
+      (entry & MMIX_PHYSICAL_ALIAS_BIT) != 0)
+    return -1;
+
+  *vector = mmix_phys_alias(entry);
+  return 0;
 }
 
 static inline pte_t
@@ -210,6 +315,59 @@ mmix_rs_read(void)
   return value;
 }
 
+#define MMIX_DEFINE_SR_READ(function, reg)                                   \
+  static inline uint64 function(void)                                        \
+  {                                                                          \
+    uint64 value;                                                            \
+                                                                             \
+    asm volatile("GET %0, " #reg : "=r"(value));                           \
+    return value;                                                            \
+  }
+
+#define MMIX_DEFINE_SR_WRITE(function, reg)                                  \
+  static inline void function(uint64 value)                                  \
+  {                                                                          \
+    asm volatile("PUT " #reg ", %0" : : "r"(value) : "memory");          \
+  }
+
+MMIX_DEFINE_SR_READ(mmix_ra_read, rA)
+// Clang requires explicit floating-environment modeling for PUT rA and permits
+// it only in module-level assembly, so the write accessor lives there.
+void mmix_ra_write(uint64 value);
+// GET rQ begins the architectural GET/PUT request handoff. A caller that
+// services requests must finish that handoff with mmix_rq_write().
+MMIX_DEFINE_SR_READ(mmix_rq_read, rQ)
+MMIX_DEFINE_SR_WRITE(mmix_rq_write, rQ)
+MMIX_DEFINE_SR_READ(mmix_rt_read, rT)
+MMIX_DEFINE_SR_WRITE(mmix_rt_write, rT)
+MMIX_DEFINE_SR_READ(mmix_rtt_read, rTT)
+MMIX_DEFINE_SR_WRITE(mmix_rtt_write, rTT)
+
+MMIX_DEFINE_SR_READ(mmix_rb_read, rB)
+MMIX_DEFINE_SR_WRITE(mmix_rb_write, rB)
+MMIX_DEFINE_SR_READ(mmix_rw_read, rW)
+MMIX_DEFINE_SR_WRITE(mmix_rw_write, rW)
+MMIX_DEFINE_SR_READ(mmix_rx_read, rX)
+MMIX_DEFINE_SR_WRITE(mmix_rx_write, rX)
+MMIX_DEFINE_SR_READ(mmix_ry_read, rY)
+MMIX_DEFINE_SR_WRITE(mmix_ry_write, rY)
+MMIX_DEFINE_SR_READ(mmix_rz_read, rZ)
+MMIX_DEFINE_SR_WRITE(mmix_rz_write, rZ)
+
+MMIX_DEFINE_SR_READ(mmix_rbb_read, rBB)
+MMIX_DEFINE_SR_WRITE(mmix_rbb_write, rBB)
+MMIX_DEFINE_SR_READ(mmix_rww_read, rWW)
+MMIX_DEFINE_SR_WRITE(mmix_rww_write, rWW)
+MMIX_DEFINE_SR_READ(mmix_rxx_read, rXX)
+MMIX_DEFINE_SR_WRITE(mmix_rxx_write, rXX)
+MMIX_DEFINE_SR_READ(mmix_ryy_read, rYY)
+MMIX_DEFINE_SR_WRITE(mmix_ryy_write, rYY)
+MMIX_DEFINE_SR_READ(mmix_rzz_read, rZZ)
+MMIX_DEFINE_SR_WRITE(mmix_rzz_write, rZZ)
+
+#undef MMIX_DEFINE_SR_WRITE
+#undef MMIX_DEFINE_SR_READ
+
 static inline void
 mmix_rv_write(uint64 value)
 {
@@ -237,6 +395,42 @@ mmix_rk_read(void)
   return value;
 }
 
+static inline void
+mmix_rk_write(uint64 value)
+{
+  asm volatile("PUT rK, %0" : : "r"(value) : "memory");
+}
+
+static inline uint64
+mmix_rq_program(uint64 value)
+{
+  return value & MMIX_RQ_PROGRAM_MASK;
+}
+
+static inline uint64
+mmix_kernel_mask(uint64 device_mask)
+{
+  return MMIX_KERNEL_PROGRAM_MASK | (device_mask & MMIX_KERNEL_INTC_MASK);
+}
+
+static inline uint64
+mmix_rq_deliverable(uint64 requests, uint64 mask)
+{
+  return requests & mask;
+}
+
+static inline int
+mmix_rq_intc_pending(uint64 requests, uint64 mask)
+{
+  return (mmix_rq_deliverable(requests, mask) & MMIX_RQ_INTC) != 0;
+}
+
+static inline uint64
+mmix_ra_disable_trips(uint64 value)
+{
+  return value & ~MMIX_RA_TRIP_ENABLE_MASK;
+}
+
 static inline int
 mmix_intr_get(void)
 {
@@ -249,9 +443,7 @@ mmix_intr_get(void)
 static inline void
 mmix_intr_off(void)
 {
-  uint64 disabled = 0;
-
-  asm volatile("PUT rK, %0" : : "r"(disabled) : "memory");
+  mmix_rk_write(0);
 }
 
 // SYNC 6 is the architectural full translation-cache invalidation. Current
@@ -267,6 +459,82 @@ mmix_rv_publish(uint64 value)
 }
 
 _Static_assert(sizeof(uint64) == 8, "MMIX octas must be 8 bytes");
+_Static_assert(MMIX_KERNEL_PROGRAM_MASK == 0x000000e400000000,
+               "kernel program mask must match the trap ABI");
+_Static_assert(MMIX_KERNEL_TRAP_MASK == 0x000000e400000100,
+               "kernel trap mask must match the platform ABI");
+_Static_assert((MMIX_RQ_PROGRAM_MASK & MMIX_RQ_INTC) == 0,
+               "program and controller requests must not overlap");
+_Static_assert((KERNEL_LOAD & (MMIX_TRAP_VECTOR_ALIGN - 1)) == 0 &&
+                 KERNEL_LIMIT < MMIX_PHYSICAL_ALIAS_BIT,
+               "kernel text must admit a negative trap alias");
+
+#define MMIX_ASSERT_TRAP_GLOBAL(reg)                                         \
+  _Static_assert(                                                            \
+    __builtin_offsetof(struct mmix_trap_state,                               \
+                       globals[(reg) - MMIX_TRAP_GLOBAL_FIRST]) ==           \
+      MMIX_TRAP_GLOBAL_OFFSET(reg),                                          \
+    "MMIX trap global offset mismatch")
+
+MMIX_ASSERT_TRAP_GLOBAL(231);
+MMIX_ASSERT_TRAP_GLOBAL(232);
+MMIX_ASSERT_TRAP_GLOBAL(233);
+MMIX_ASSERT_TRAP_GLOBAL(234);
+MMIX_ASSERT_TRAP_GLOBAL(235);
+MMIX_ASSERT_TRAP_GLOBAL(236);
+MMIX_ASSERT_TRAP_GLOBAL(237);
+MMIX_ASSERT_TRAP_GLOBAL(238);
+MMIX_ASSERT_TRAP_GLOBAL(239);
+MMIX_ASSERT_TRAP_GLOBAL(240);
+MMIX_ASSERT_TRAP_GLOBAL(241);
+MMIX_ASSERT_TRAP_GLOBAL(242);
+MMIX_ASSERT_TRAP_GLOBAL(243);
+MMIX_ASSERT_TRAP_GLOBAL(244);
+MMIX_ASSERT_TRAP_GLOBAL(245);
+MMIX_ASSERT_TRAP_GLOBAL(246);
+MMIX_ASSERT_TRAP_GLOBAL(247);
+MMIX_ASSERT_TRAP_GLOBAL(248);
+MMIX_ASSERT_TRAP_GLOBAL(249);
+MMIX_ASSERT_TRAP_GLOBAL(250);
+MMIX_ASSERT_TRAP_GLOBAL(251);
+MMIX_ASSERT_TRAP_GLOBAL(252);
+MMIX_ASSERT_TRAP_GLOBAL(253);
+MMIX_ASSERT_TRAP_GLOBAL(254);
+
+#undef MMIX_ASSERT_TRAP_GLOBAL
+
+#define MMIX_ASSERT_TRAP_OFFSET(member, offset)                              \
+  _Static_assert(__builtin_offsetof(struct mmix_trap_state, member) ==       \
+                   (offset),                                                 \
+                 "MMIX trap-state offset mismatch")
+
+MMIX_ASSERT_TRAP_OFFSET(rj, MMIX_TRAP_RJ_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rbb, MMIX_TRAP_RBB_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rww, MMIX_TRAP_RWW_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rxx, MMIX_TRAP_RXX_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(ryy, MMIX_TRAP_RYY_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rzz, MMIX_TRAP_RZZ_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rq, MMIX_TRAP_RQ_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(restore_rk, MMIX_TRAP_RESTORE_RK_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rg, MMIX_TRAP_RG_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rl, MMIX_TRAP_RL_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(ro, MMIX_TRAP_RO_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rs, MMIX_TRAP_RS_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(ra, MMIX_TRAP_RA_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rd, MMIX_TRAP_RD_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(re, MMIX_TRAP_RE_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rh, MMIX_TRAP_RH_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rm, MMIX_TRAP_RM_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rr, MMIX_TRAP_RR_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rp, MMIX_TRAP_RP_OFFSET);
+MMIX_ASSERT_TRAP_OFFSET(rf, MMIX_TRAP_RF_OFFSET);
+
+#undef MMIX_ASSERT_TRAP_OFFSET
+
+_Static_assert(sizeof(struct mmix_trap_state) == MMIX_TRAP_STATE_SIZE,
+               "MMIX trap-state size mismatch");
+_Static_assert(__alignof__(struct mmix_trap_state) == MMIX_TRAP_STATE_ALIGN,
+               "MMIX trap-state alignment mismatch");
 _Static_assert(PGSIZE == 0x2000, "MMIX pages must be 8 KiB");
 _Static_assert(MMIX_PT_ENTRIES * sizeof(pte_t) == PGSIZE,
                "one page-table block must contain 1024 octas");

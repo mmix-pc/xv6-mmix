@@ -3,6 +3,7 @@ U=user
 
 OBJS = \
   $K/entry.o \
+  $K/specialreg.o \
   $K/start.o \
   $K/bootinfo.o \
   $K/cpu.o \
