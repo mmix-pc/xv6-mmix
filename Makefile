@@ -11,6 +11,7 @@ OBJS = \
   $K/spinlock.o \
   $K/string.o \
   $K/uart.o \
+  $K/vm.o \
   $K/early_print.o
 
 CC = clang
