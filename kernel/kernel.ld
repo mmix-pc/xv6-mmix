@@ -31,11 +31,18 @@ SECTIONS
   . = ALIGN(0x2000);
   kernel_end = .;
 
-  kernel_root_tables_start = 0x00000000;
-  kernel_root_tables_end = 0x00006000;
+  kernel_low_vectors_start = 0x00000000;
+  kernel_low_vectors_end = 0x00002000;
+  kernel_root_tables_start = 0x00002000;
+  kernel_root_tables_end = 0x00008000;
 
   ASSERT(_entry == 0x00100000,
          "kernel entry does not match KERNEL_ENTRY")
+  ASSERT(kernel_low_vectors_start == 0 &&
+             kernel_low_vectors_end - kernel_low_vectors_start == 0x2000,
+         "MMIX low vectors must reserve the first physical page")
+  ASSERT(kernel_root_tables_start == kernel_low_vectors_end,
+         "kernel root tables must follow the low-vector page")
   ASSERT((kernel_root_tables_start & 0x1fff) == 0,
          "kernel root tables are not page-aligned")
   ASSERT(kernel_root_tables_end - kernel_root_tables_start == 0x6000,

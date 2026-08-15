@@ -476,7 +476,8 @@ kernel_pagetable_audit(pagetable_t pagetable)
       mmix_pagetable_translate(pagetable, UART0_BASE, PTE_X, &root_pa) == 0)
     return -1;
 
-  if (require_unmapped(pagetable, KERNEL_ROOT_BASE) < 0 ||
+  if (require_unmapped(pagetable, MMIX_LOW_VECTOR_BASE) < 0 ||
+      require_unmapped(pagetable, KERNEL_ROOT_BASE) < 0 ||
       require_unmapped(pagetable, POOL_PHYS_BASE) < 0 ||
       require_unmapped(pagetable, BOOTINFO_BASE) < 0 ||
       require_unmapped(pagetable, FRAMEBUFFER_BASE) < 0 ||
@@ -496,7 +497,8 @@ kvminit(void)
   uint64 free_before = kalloc_free_pages();
   uint64 free_after;
 
-  if (mmix_rv_read() == MMIX_KERNEL_RV || KERNEL_ROOT_BASE != 0 ||
+  if (mmix_rv_read() == MMIX_KERNEL_RV ||
+      KERNEL_ROOT_BASE != MMIX_LOW_VECTOR_LIMIT ||
       (KERNEL_ROOT_BASE & (PGSIZE - 1)) != 0 ||
       KERNEL_ROOT_LIMIT - KERNEL_ROOT_BASE !=
         MMIX_KERNEL_ROOT_BLOCKS * PGSIZE ||

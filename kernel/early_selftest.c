@@ -24,6 +24,7 @@ allocator_selftest(void)
       kalloc_page_is_managed((void *)(first - PGSIZE)) ||
       kalloc_page_is_managed((void *)KALLOC_LIMIT) ||
       kalloc_page_is_managed((void *)REGISTER_STACK_BASE) ||
+      kalloc_page_is_managed((void *)MMIX_LOW_VECTOR_BASE) ||
       kalloc_page_is_managed((void *)KERNEL_ROOT_BASE) ||
       kalloc_page_is_managed((void *)KERNEL_LOAD) ||
       kalloc_page_is_managed((void *)POOL_PHYS_BASE))
