@@ -4,6 +4,8 @@
 #include "early_uart.h"
 #include "kalloc.h"
 
+void kvminit(void);
+
 struct mmix_boot_state mmix_boot;
 
 static void mmix_wait(void) __attribute__((noreturn));
@@ -27,5 +29,6 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
   mmix_early_print_boot(&mmix_boot);
   kinit();
   mmix_early_selftest();
+  kvminit();
   mmix_wait();
 }

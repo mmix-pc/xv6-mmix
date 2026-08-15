@@ -192,6 +192,24 @@ mmix_rv_read(void)
   return value;
 }
 
+static inline uint64
+mmix_ro_read(void)
+{
+  uint64 value;
+
+  asm volatile("GET %0, rO" : "=r"(value));
+  return value;
+}
+
+static inline uint64
+mmix_rs_read(void)
+{
+  uint64 value;
+
+  asm volatile("GET %0, rS" : "=r"(value));
+  return value;
+}
+
 static inline void
 mmix_rv_write(uint64 value)
 {
