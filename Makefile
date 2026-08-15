@@ -3,8 +3,10 @@ U=user
 
 OBJS = \
   $K/entry.o \
+  $K/kernelvec.o \
   $K/specialreg.o \
   $K/start.o \
+  $K/trap.o \
   $K/bootinfo.o \
   $K/cpu.o \
   $K/early_selftest.o \

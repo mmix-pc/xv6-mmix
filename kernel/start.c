@@ -6,6 +6,8 @@
 
 void kvminit(void);
 void kvminithart(void);
+void trapinit(void);
+void trapinithart(void);
 
 struct mmix_boot_state mmix_boot;
 
@@ -35,6 +37,8 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
   bootinfo_status = mmix_boot.bootinfo_status;
   kvminit();
   kvminithart();
+  trapinit();
+  trapinithart();
   if (mmix_boot.bootinfo_status != bootinfo_status)
     panic("paging global");
   mmix_wait();

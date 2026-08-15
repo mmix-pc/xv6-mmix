@@ -8,6 +8,8 @@ SECTIONS
 
   .text : ALIGN(0x2000) {
     KEEP(kernel/entry.o(.text))
+    . = ALIGN(16);
+    KEEP(kernel/kernelvec.o(.text))
     *(.text .text.*)
   }
   . = ALIGN(0x2000);
@@ -51,6 +53,10 @@ SECTIONS
          "kernel root tables overlap the register stack")
   ASSERT(kernel_text_end > 0x00100000,
          "kernel text is empty")
+  ASSERT((mmix_kernel_trap_entry & 0xf) == 0 &&
+             mmix_kernel_trap_entry >= 0x00100000 &&
+             mmix_kernel_trap_entry < kernel_text_end,
+         "MMIX kernel trap entry is misplaced")
   ASSERT((0x00100000 & 0xf) == 0 &&
              kernel_text_end < 0x8000000000000000,
          "kernel text cannot provide a negative MMIX trap alias")
@@ -62,8 +68,19 @@ SECTIONS
          "kernel read-only data end is not page-aligned")
   ASSERT(kernel_rodata_end <= kernel_end,
          "kernel writable data precedes read-only data end")
+  ASSERT(mmix_trap_active >= kernel_rodata_end &&
+             mmix_trap_active + 8 <= kernel_end &&
+             mmix_trap_rk_shadow >= kernel_rodata_end &&
+             mmix_trap_rk_shadow + 8 <= kernel_end &&
+             mmix_trap_vector >= kernel_rodata_end &&
+             mmix_trap_vector + 8 <= kernel_end,
+         "MMIX trap state is outside kernel writable storage")
   ASSERT(kernel_end <= 0x05ffe000,
          "kernel overlaps the bootstrap stack")
+  ASSERT(0x05ffe000 + 352 < 0x06000000,
+         "bootstrap stack cannot hold an MMIX trap state")
+  ASSERT(0x00008000 <= 0x00010000 && 0x00010000 < 0x00100000,
+         "MMIX register-stack backing range is invalid")
 
   /DISCARD/ : {
     *(.comment)

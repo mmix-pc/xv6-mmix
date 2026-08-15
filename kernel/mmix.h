@@ -145,6 +145,13 @@
 
 #define MMIX_TRAP_VECTOR_ALIGN 16
 
+// The entry mechanism classifies the architectural saved state before it
+// crosses the C dispatch boundary.
+#define MMIX_TRAP_CLASS_UNKNOWN  0
+#define MMIX_TRAP_CLASS_FORCED   1
+#define MMIX_TRAP_CLASS_PROGRAM  2
+#define MMIX_TRAP_CLASS_EXTERNAL 3
+
 #if !defined(__ASSEMBLER__)
 
 #include "types.h"
@@ -184,6 +191,13 @@ struct mmix_trap_state {
   uint64 rr;
   uint64 rp;
   uint64 rf;
+};
+
+enum mmix_trap_class {
+  MMIX_TRAP_UNKNOWN = MMIX_TRAP_CLASS_UNKNOWN,
+  MMIX_TRAP_FORCED = MMIX_TRAP_CLASS_FORCED,
+  MMIX_TRAP_PROGRAM = MMIX_TRAP_CLASS_PROGRAM,
+  MMIX_TRAP_EXTERNAL = MMIX_TRAP_CLASS_EXTERNAL,
 };
 
 // MMIX page tables are described by rV, not by an Sv39-style root-page
@@ -312,6 +326,15 @@ mmix_rs_read(void)
   uint64 value;
 
   asm volatile("GET %0, rS" : "=r"(value));
+  return value;
+}
+
+static inline uint64
+mmix_sp_read(void)
+{
+  uint64 value;
+
+  asm volatile("OR %0, r254, 0" : "=r"(value));
   return value;
 }
 
