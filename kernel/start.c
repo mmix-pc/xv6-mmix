@@ -5,6 +5,7 @@
 #include "kalloc.h"
 
 void kvminit(void);
+void kvminithart(void);
 
 struct mmix_boot_state mmix_boot;
 
@@ -20,6 +21,8 @@ mmix_wait(void)
 void
 mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
 {
+  int bootinfo_status;
+
   mmix_boot.startup_cpu_id = startup_cpu_id;
   mmix_boot.bootinfo_pa = bootinfo_pa;
   mmix_boot.bootinfo_status =
@@ -29,6 +32,10 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
   mmix_early_print_boot(&mmix_boot);
   kinit();
   mmix_early_selftest();
+  bootinfo_status = mmix_boot.bootinfo_status;
   kvminit();
+  kvminithart();
+  if (mmix_boot.bootinfo_status != bootinfo_status)
+    panic("paging global");
   mmix_wait();
 }

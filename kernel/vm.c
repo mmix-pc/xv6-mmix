@@ -1,5 +1,6 @@
 #include "mmix.h"
 #include "defs.h"
+#include "early_print.h"
 #include "kalloc.h"
 #include "vm.h"
 
@@ -9,6 +10,9 @@
 #define MMIX_KERNEL_CHILD_TABLES                                               \
   (MMIX_KERNEL_RAM_CHILDREN + MMIX_KERNEL_DEVICE_CHILDREN)
 #define MMIX_KERNEL_DEVICE_MAP_END (INTC_BASE + INTC_SIZE)
+#define MMIX_KERNEL_LIVE_TEST_VA   MMIX_KERNEL_DEVICE_MAP_END
+#define MMIX_KERNEL_LIVE_TEST_A    0x4d4d495850414731
+#define MMIX_KERNEL_LIVE_TEST_B    0x4d4d495850414732
 
 extern char kernel_text_end[];
 extern char kernel_rodata_end[];
@@ -445,6 +449,7 @@ kernel_pagetable_audit(pagetable_t pagetable)
       require_identity(pagetable, ro, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, rs, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, (uint64)kvminit, PTE_R | PTE_X) < 0 ||
+      require_identity(pagetable, (uint64)kvminithart, PTE_R | PTE_X) < 0 ||
       require_identity(pagetable, (uint64)&children, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, (uint64)&mmix_boot, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, (uint64)&kernel_pagetable, PTE_R | PTE_W) <
@@ -525,4 +530,68 @@ kvminit(void)
     panic("kvminit tables");
   if (kernel_pagetable_audit(kernel_pagetable) < 0)
     panic("kvminit audit");
+}
+
+// FIXME: Remove when normal VM lifecycle tests exercise live MMIX PTE updates
+// and TLB synchronization without relying on this early boot check.
+static void
+kernel_pagetable_live_audit(void)
+{
+  volatile uint64 *first;
+  volatile uint64 *second;
+  volatile uint64 *test = (volatile uint64 *)MMIX_KERNEL_LIVE_TEST_VA;
+  uint64 free_before = kalloc_free_pages();
+  pte_t *leaf;
+
+  first = kalloc();
+  second = kalloc();
+  if (first == 0 || second == 0)
+    panic("paging alloc");
+  *first = MMIX_KERNEL_LIVE_TEST_A;
+  *second = MMIX_KERNEL_LIVE_TEST_B;
+
+  if (mappages(kernel_pagetable, MMIX_KERNEL_LIVE_TEST_VA, PGSIZE,
+               (uint64)first, PTE_R | PTE_W) < 0 ||
+      *test != MMIX_KERNEL_LIVE_TEST_A)
+    panic("paging map");
+  *test = ~MMIX_KERNEL_LIVE_TEST_A;
+  if (*first != ~MMIX_KERNEL_LIVE_TEST_A)
+    panic("paging write");
+
+  leaf = walk(kernel_pagetable, MMIX_KERNEL_LIVE_TEST_VA, 0);
+  if (leaf == 0 ||
+      *leaf != mmix_pte_make((uint64)first, MMIX_KERNEL_N, PTE_R | PTE_W))
+    panic("paging leaf");
+  *leaf = mmix_pte_make((uint64)second, MMIX_KERNEL_N, PTE_R | PTE_W);
+  mmix_pagetable_sync(kernel_pagetable);
+  if (*test != MMIX_KERNEL_LIVE_TEST_B)
+    panic("paging update");
+
+  uvmunmap(kernel_pagetable, MMIX_KERNEL_LIVE_TEST_VA, 1, 0);
+  if (walkaddr(kernel_pagetable, MMIX_KERNEL_LIVE_TEST_VA) != 0)
+    panic("paging unmap");
+  kfree((void *)second);
+  kfree((void *)first);
+  if (kalloc_free_pages() != free_before)
+    panic("paging restore");
+}
+
+void
+kvminithart(void)
+{
+  volatile uint64 stack_probe = MMIX_KERNEL_LIVE_TEST_A;
+
+  if (mmix_rv_read() == kernel_pagetable->rv || mmix_intr_get())
+    panic("paging state");
+  mmix_rv_publish(kernel_pagetable->rv);
+  if (mmix_rv_read() != kernel_pagetable->rv || mmix_intr_get() ||
+      stack_probe != MMIX_KERNEL_LIVE_TEST_A ||
+      mmix_ro_read() < REGISTER_STACK_BASE ||
+      mmix_ro_read() >= REGISTER_STACK_LIMIT ||
+      mmix_rs_read() < REGISTER_STACK_BASE ||
+      mmix_rs_read() >= REGISTER_STACK_LIMIT)
+    panic("paging enable");
+
+  kernel_pagetable_live_audit();
+  mmix_early_print_paging(kernel_pagetable->rv);
 }

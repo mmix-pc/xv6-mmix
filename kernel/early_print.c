@@ -103,6 +103,14 @@ mmix_early_print_boot(const struct mmix_boot_state *boot)
 }
 
 void
+mmix_early_print_paging(uint64 rv)
+{
+  early_puts("rV: ");
+  early_put_hex64(rv);
+  early_puts("\npaging enabled\n");
+}
+
+void
 panic(char *message)
 {
   early_puts("panic: ");

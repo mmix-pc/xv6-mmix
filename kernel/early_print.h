@@ -4,6 +4,7 @@
 struct mmix_boot_state;
 
 void mmix_early_print_boot(const struct mmix_boot_state *boot);
+void mmix_early_print_paging(uint64 rv);
 void panic(char *message) __attribute__((noreturn));
 
 #endif
