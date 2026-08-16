@@ -2,6 +2,7 @@
 #include "early_print.h"
 #include "early_selftest.h"
 #include "early_uart.h"
+#include "intc.h"
 #include "kalloc.h"
 
 void kvminit(void);
@@ -39,6 +40,8 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
   kvminithart();
   trapinit();
   trapinithart();
+  if (mmix_intc_init() != MMIX_INTC_OK)
+    panic("intc init");
   if (mmix_boot.bootinfo_status != bootinfo_status)
     panic("paging global");
   mmix_wait();

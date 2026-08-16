@@ -10,6 +10,7 @@ OBJS = \
   $K/bootinfo.o \
   $K/cpu.o \
   $K/early_selftest.o \
+  $K/intc.o \
   $K/kalloc.o \
   $K/spinlock.o \
   $K/string.o \
