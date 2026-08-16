@@ -11,6 +11,7 @@ OBJS = \
   $K/cpu.o \
   $K/kcontext.o \
   $K/swtch.o \
+  $K/proc.o \
   $K/early_selftest.o \
   $K/intc.o \
   $K/timer.o \

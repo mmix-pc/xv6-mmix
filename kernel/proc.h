@@ -1,11 +1,5 @@
 #include "cpu.h"
 
-// SAVE owns the complete suspended MMIX register state in its register-stack
-// record. UNSAVE consumes this address when the context is resumed.
-struct context {
-  uint64 state;
-};
-
 // per-process data for the trap handling code in trampoline.S.
 // sits in a page by itself just under the trampoline page in the
 // user page table. not specially mapped in the kernel page table.

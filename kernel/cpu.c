@@ -49,5 +49,11 @@ intr_on(void)
   mmix_intr_mask_write(mmix_rk_read() | MMIX_KERNEL_INTC_MASK);
 }
 
+void
+cpu_idle(void)
+{
+  asm volatile("SWYM 0, 0, 0");
+}
+
 _Static_assert(NCPU == BOOT_CPU_COUNT,
                "the kernel must provide exactly one CPU structure");

@@ -6,27 +6,23 @@
 #include "early_uart.h"
 #include "intc.h"
 #include "kalloc.h"
+#include "memlayout.h"
 #include "timer.h"
 
 void kvminit(void);
 void kvminithart(void);
 void trapinit(void);
 void trapinithart(void);
+void procinit(void);
+void scheduler(void) __attribute__((noreturn));
+void swtch(struct context *, struct context *);
 
 struct mmix_boot_state mmix_boot;
-
-static void mmix_wait(void) __attribute__((noreturn));
-
-static void
-mmix_wait(void)
-{
-  for (;;)
-    asm volatile("SWYM 0, 0, 0");
-}
 
 void
 mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
 {
+  struct context boot_context;
   int bootinfo_status;
 
   mmix_boot.startup_cpu_id = startup_cpu_id;
@@ -42,6 +38,9 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
   kvminit();
   kvminithart();
   mmix_kcontext_init();
+  procinit();
+  mmix_kcontext_prepare(&cpus[BOOT_CPU_ID].context,
+                        MMIX_CONTEXT_SCHEDULER_SLOT, scheduler);
   trapinit();
   trapinithart();
   if (mmix_intc_init() != MMIX_INTC_OK)
@@ -54,6 +53,7 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
     panic("timer arm");
   if (mmix_intc_set_enabled(MMIX_TIMER_IRQ, 1) != MMIX_INTC_OK)
     panic("timer irq enable");
-  intr_on();
-  mmix_wait();
+  intr_off();
+  swtch(&boot_context, &cpus[BOOT_CPU_ID].context);
+  panic("scheduler returned");
 }
