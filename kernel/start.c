@@ -1,4 +1,5 @@
 #include "boot.h"
+#include "kcontext.h"
 #include "cpu.h"
 #include "early_print.h"
 #include "early_selftest.h"
@@ -40,6 +41,7 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
   bootinfo_status = mmix_boot.bootinfo_status;
   kvminit();
   kvminithart();
+  mmix_kcontext_init();
   trapinit();
   trapinithart();
   if (mmix_intc_init() != MMIX_INTC_OK)

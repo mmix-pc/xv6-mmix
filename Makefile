@@ -9,6 +9,7 @@ OBJS = \
   $K/trap.o \
   $K/bootinfo.o \
   $K/cpu.o \
+  $K/kcontext.o \
   $K/early_selftest.o \
   $K/intc.o \
   $K/timer.o \

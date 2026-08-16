@@ -1,23 +1,9 @@
 #include "cpu.h"
 
-// Saved registers for kernel context switches.
+// SAVE owns the complete suspended MMIX register state in its register-stack
+// record. UNSAVE consumes this address when the context is resumed.
 struct context {
-  uint64 ra;
-  uint64 sp;
-
-  // callee-saved
-  uint64 s0;
-  uint64 s1;
-  uint64 s2;
-  uint64 s3;
-  uint64 s4;
-  uint64 s5;
-  uint64 s6;
-  uint64 s7;
-  uint64 s8;
-  uint64 s9;
-  uint64 s10;
-  uint64 s11;
+  uint64 state;
 };
 
 // per-process data for the trap handling code in trampoline.S.

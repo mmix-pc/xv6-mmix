@@ -154,6 +154,12 @@
 
 #define MMIX_TRAP_VECTOR_ALIGN 16
 
+// SAVE returns an address naming the complete MMIX process-state record.
+// swtch stores only that address; UNSAVE restores the record destructively.
+#define MMIX_CONTEXT_STATE_OFFSET 0
+#define MMIX_CONTEXT_SIZE         8
+#define MMIX_CONTEXT_ALIGN        8
+
 // The entry mechanism classifies the architectural saved state before it
 // crosses the C dispatch boundary.
 #define MMIX_TRAP_CLASS_UNKNOWN  0

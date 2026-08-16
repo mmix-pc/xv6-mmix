@@ -93,6 +93,43 @@
 #define BOOT_STACK_SIZE MMIX_PAGE_SIZE
 #define BOOT_STACK_TOP (BOOT_STACK_BASE + BOOT_STACK_SIZE)
 
+// Single-CPU kernel context window at the top of positive segment 0. Slot 0
+// belongs to the scheduler; slots 1 through 64 correspond to proc[0..63].
+// Each slot has two mapped pages separated and bounded by unmapped guards.
+#define MMIX_CONTEXT_AREA_TOP          0x0000080000000000
+#define MMIX_CONTEXT_SLOT_COUNT        65
+#define MMIX_CONTEXT_SCHEDULER_SLOT    0
+#define MMIX_CONTEXT_PROCESS_SLOT_BASE 1
+#define MMIX_CONTEXT_SLOT_PAGES        5
+#define MMIX_CONTEXT_SLOT_STRIDE (MMIX_CONTEXT_SLOT_PAGES * MMIX_PAGE_SIZE)
+#define MMIX_CONTEXT_AREA_SIZE                                                 \
+  (MMIX_CONTEXT_SLOT_COUNT * MMIX_CONTEXT_SLOT_STRIDE)
+#define MMIX_CONTEXT_AREA_BASE (MMIX_CONTEXT_AREA_TOP - MMIX_CONTEXT_AREA_SIZE)
+
+#define MMIX_CONTEXT_SLOT_TOP(slot)                                            \
+  (MMIX_CONTEXT_AREA_TOP - (slot) * MMIX_CONTEXT_SLOT_STRIDE)
+#define MMIX_CONTEXT_LOW_GUARD(slot)                                           \
+  (MMIX_CONTEXT_SLOT_TOP(slot) - 5 * MMIX_PAGE_SIZE)
+#define MMIX_CONTEXT_SOFTWARE_STACK_BASE(slot)                                 \
+  (MMIX_CONTEXT_SLOT_TOP(slot) - 4 * MMIX_PAGE_SIZE)
+#define MMIX_CONTEXT_SOFTWARE_STACK_TOP(slot)                                  \
+  (MMIX_CONTEXT_SLOT_TOP(slot) - 3 * MMIX_PAGE_SIZE)
+#define MMIX_CONTEXT_MIDDLE_GUARD(slot) MMIX_CONTEXT_SOFTWARE_STACK_TOP(slot)
+#define MMIX_CONTEXT_REGISTER_STACK_BASE(slot)                                 \
+  (MMIX_CONTEXT_SLOT_TOP(slot) - 2 * MMIX_PAGE_SIZE)
+#define MMIX_CONTEXT_REGISTER_STACK_LIMIT(slot)                                \
+  (MMIX_CONTEXT_SLOT_TOP(slot) - MMIX_PAGE_SIZE)
+#define MMIX_CONTEXT_HIGH_GUARD(slot) MMIX_CONTEXT_REGISTER_STACK_LIMIT(slot)
+
+#define MMIX_PROCESS_CONTEXT_SLOT(index)                                       \
+  (MMIX_CONTEXT_PROCESS_SLOT_BASE + (index))
+#define KSTACK(index)                                                          \
+  MMIX_CONTEXT_SOFTWARE_STACK_BASE(MMIX_PROCESS_CONTEXT_SLOT(index))
+#define MMIX_PROCESS_REGISTER_STACK_BASE(index)                                \
+  MMIX_CONTEXT_REGISTER_STACK_BASE(MMIX_PROCESS_CONTEXT_SLOT(index))
+#define MMIX_PROCESS_REGISTER_STACK_LIMIT(index)                               \
+  MMIX_CONTEXT_REGISTER_STACK_LIMIT(MMIX_PROCESS_CONTEXT_SLOT(index))
+
 // FIXME: kernel.ld provides a page-aligned kernel_end. Keep this macro as an
 // identity operation for now: the MMIX code generator otherwise folds the
 // usual round-up addition into an unaligned GETA symbol addend that the linker
@@ -155,6 +192,25 @@ _Static_assert(BOOT_STACK_SIZE == MMIX_PAGE_SIZE,
                "the kernel must reserve exactly one bootstrap stack page");
 _Static_assert(BOOT_STACK_TOP == LOW_RAM_END,
                "bootstrap stack must end at the top of Low RAM");
+_Static_assert(MMIX_CONTEXT_AREA_TOP == 0x0000080000000000 &&
+                 MMIX_CONTEXT_AREA_BASE == 0x000007ffffd76000,
+               "kernel context window must match the scheduler ABI");
+_Static_assert(MMIX_CONTEXT_SLOT_STRIDE == 0xa000 &&
+                 MMIX_CONTEXT_AREA_SIZE == 0x28a000,
+               "kernel context slot geometry must match the scheduler ABI");
+_Static_assert(MMIX_CONTEXT_AREA_BASE > MMIO_BASE + INTC_SIZE,
+               "kernel contexts must not overlap identity or device maps");
+_Static_assert((MMIX_CONTEXT_AREA_BASE / 0x800000) ==
+                 ((MMIX_CONTEXT_AREA_TOP - 1) / 0x800000),
+               "kernel contexts must share one level-1 table span");
+_Static_assert(MMIX_CONTEXT_HIGH_GUARD(MMIX_CONTEXT_SCHEDULER_SLOT) ==
+                   MMIX_CONTEXT_AREA_TOP - MMIX_PAGE_SIZE &&
+                 MMIX_CONTEXT_LOW_GUARD(MMIX_CONTEXT_SLOT_COUNT - 1) ==
+                   MMIX_CONTEXT_AREA_BASE,
+               "kernel context endpoints must match the reserved window");
+_Static_assert(KSTACK(0) == 0x000007fffffee000 &&
+                 KSTACK(63) == 0x000007ffffd78000,
+               "process kernel-stack endpoints must match the scheduler ABI");
 _Static_assert(KALLOC_LIMIT <= LOW_RAM_END,
                "allocator limit must remain inside Low RAM");
 _Static_assert(KALLOC_START(KERNEL_LOAD) < KALLOC_LIMIT,
