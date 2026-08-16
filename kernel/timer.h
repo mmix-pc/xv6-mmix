@@ -18,5 +18,7 @@ int mmix_timer_pending(int *pending);
 int mmix_timer_disable(void);
 int mmix_timer_acknowledge(void);
 int mmix_timer_arm_next(void);
+int mmix_timer_record_tick(void);
+uint64 mmix_timer_ticks(void);
 
 #endif

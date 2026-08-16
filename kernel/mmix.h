@@ -469,7 +469,7 @@ mmix_ra_disable_trips(uint64 value)
 static inline int
 mmix_intr_get(void)
 {
-  return mmix_rk_read() != 0;
+  return (mmix_rk_read() & MMIX_KERNEL_INTC_MASK) != 0;
 }
 
 // SYNC 6 is the architectural full translation-cache invalidation. Current

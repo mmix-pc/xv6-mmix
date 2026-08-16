@@ -1,4 +1,5 @@
 #include "boot.h"
+#include "cpu.h"
 #include "early_print.h"
 #include "early_selftest.h"
 #include "early_uart.h"
@@ -47,5 +48,10 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
     panic("timer init");
   if (mmix_boot.bootinfo_status != bootinfo_status)
     panic("paging global");
+  if (mmix_timer_arm_next() != MMIX_TIMER_OK)
+    panic("timer arm");
+  if (mmix_intc_set_enabled(MMIX_TIMER_IRQ, 1) != MMIX_INTC_OK)
+    panic("timer irq enable");
+  intr_on();
   mmix_wait();
 }

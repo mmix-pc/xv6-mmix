@@ -131,6 +131,26 @@ mmix_early_print_trap(const struct mmix_trap_diagnostic *diagnostic)
   early_put_hex64(diagnostic->ryy);
   early_puts(" rzz=");
   early_put_hex64(diagnostic->rzz);
+  early_puts("\nstate=");
+  early_put_hex64(diagnostic->state);
+  early_puts(" sp=");
+  early_put_hex64(diagnostic->sp);
+  early_puts(" fp=");
+  early_put_hex64(diagnostic->fp);
+  early_puts("\nro=");
+  early_put_hex64(diagnostic->ro);
+  early_puts(" rs=");
+  early_put_hex64(diagnostic->rs);
+  early_puts(" rl=");
+  early_put_hex64(diagnostic->rl);
+  early_puts("\nintc-pending=");
+  early_put_hex64(diagnostic->intc_pending);
+  early_puts(" intc-enabled=");
+  early_put_hex64(diagnostic->intc_enabled);
+  early_puts(" claim=");
+  early_put_u64(diagnostic->intc_claim);
+  early_puts(" timer-pending=");
+  early_put_int(diagnostic->timer_pending);
   mmix_early_uart_putc('\n');
 }
 

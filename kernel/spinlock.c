@@ -87,8 +87,9 @@ push_off(void)
 {
   // disable interrupts to prevent an involuntary context
   // switch while using mycpu().
-  // FIXME(traps): GET rK and PUT rK,0 are not atomic; review this window
-  // before enabling dynamic interrupts.
+  // MMIX takes dynamic traps only between completed instructions and the trap
+  // entry preserves every interrupted register. A trap between these calls
+  // therefore returns to intr_off() with old intact.
   int old = intr_get();
   intr_off();
 

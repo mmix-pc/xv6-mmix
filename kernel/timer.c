@@ -20,6 +20,8 @@ enum {
   (MMIX_TIMER_UNITS_PER_SECOND / MMIX_TIMER_TICKS_PER_SECOND)
 #define MMIX_TIMER_MAX_DEADLINE 0x7fffffffffffffffULL
 
+static volatile uint64 timer_ticks;
+
 static int
 timer_platform_valid(void)
 {
@@ -67,6 +69,7 @@ mmix_timer_init(void)
   if (!timer_platform_valid())
     return MMIX_TIMER_BAD_PLATFORM;
 
+  timer_ticks = 0;
   compare = timer_context_register(MMIX_TIMER_CONTEXT_COMPARE_OFFSET);
   control = timer_context_register(MMIX_TIMER_CONTEXT_CONTROL_OFFSET);
   status = timer_context_register(MMIX_TIMER_CONTEXT_STATUS_OFFSET);
@@ -154,6 +157,21 @@ mmix_timer_arm_next(void)
         (MMIX_TIMER_CONTROL_ENABLE | MMIX_TIMER_CONTROL_IRQ_ENABLE))
     return MMIX_TIMER_BAD_STATE;
   return MMIX_TIMER_OK;
+}
+
+int
+mmix_timer_record_tick(void)
+{
+  if (timer_ticks == ~0ULL)
+    return MMIX_TIMER_BAD_STATE;
+  timer_ticks++;
+  return MMIX_TIMER_OK;
+}
+
+uint64
+mmix_timer_ticks(void)
+{
+  return timer_ticks;
 }
 
 _Static_assert((MMIX_TIMER_UNITS_PER_SECOND % MMIX_TIMER_TICKS_PER_SECOND) == 0,

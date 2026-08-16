@@ -40,15 +40,13 @@ intr_get(void)
 void
 intr_off(void)
 {
-  mmix_intr_mask_write(0);
+  mmix_intr_mask_write(mmix_rk_read() & ~MMIX_KERNEL_INTC_MASK);
 }
 
-// External dynamic interrupts do not have a handler yet, so enabling them is
-// unsafe. The trap module manages its program-cause mask separately.
 void
 intr_on(void)
 {
-  panic("intr_on");
+  mmix_intr_mask_write(mmix_rk_read() | MMIX_KERNEL_INTC_MASK);
 }
 
 _Static_assert(NCPU == BOOT_CPU_COUNT,

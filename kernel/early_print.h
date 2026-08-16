@@ -13,6 +13,16 @@ struct mmix_trap_diagnostic {
   uint64 rxx;
   uint64 ryy;
   uint64 rzz;
+  uint64 state;
+  uint64 sp;
+  uint64 fp;
+  uint64 ro;
+  uint64 rs;
+  uint64 rl;
+  uint32 intc_pending;
+  uint32 intc_enabled;
+  uint32 intc_claim;
+  int timer_pending;
 };
 
 void mmix_early_print_boot(const struct mmix_boot_state *boot);
