@@ -11,6 +11,26 @@
 enum {
   MMIX_CONTEXT_MAPPED_PAGES = 2,
   MMIX_CONTEXT_NEW_TABLE_PAGES = 2,
+  MMIX_CONTEXT_GLOBAL_COUNT = 256 - MMIX_ABI_GLOBAL_FIRST,
+};
+
+struct mmix_initial_context {
+  uint64 outer_hole;
+  uint64 local_hole;
+  uint64 globals[MMIX_CONTEXT_GLOBAL_COUNT];
+  uint64 rb;
+  uint64 rd;
+  uint64 re;
+  uint64 rh;
+  uint64 rj;
+  uint64 rm;
+  uint64 rr;
+  uint64 rp;
+  uint64 rw;
+  uint64 rx;
+  uint64 ry;
+  uint64 rz;
+  uint64 rg_ra;
 };
 
 static uint64 context_software_pa[MMIX_CONTEXT_SLOT_COUNT];
@@ -23,6 +43,16 @@ _Static_assert(sizeof(struct context) == MMIX_CONTEXT_SIZE,
                "MMIX context size mismatch");
 _Static_assert(__alignof__(struct context) == MMIX_CONTEXT_ALIGN,
                "MMIX context alignment mismatch");
+_Static_assert(__builtin_offsetof(struct mmix_initial_context, rg_ra) ==
+                 MMIX_CONTEXT_INITIAL_STATE_OFFSET,
+               "MMIX initial context state offset mismatch");
+_Static_assert(sizeof(struct mmix_initial_context) ==
+                 MMIX_CONTEXT_INITIAL_SIZE,
+               "MMIX initial context size mismatch");
+_Static_assert(MMIX_CONTEXT_INITIAL_STATE_OFFSET + sizeof(uint64) ==
+                 MMIX_CONTEXT_INITIAL_SIZE &&
+                 MMIX_CONTEXT_INITIAL_SIZE <= MMIX_PAGE_SIZE,
+               "MMIX initial context must fit its register-stack page");
 
 static int
 context_unmapped(uint64 va)
@@ -96,4 +126,31 @@ mmix_kcontext_init(void)
         MMIX_CONTEXT_SLOT_COUNT * MMIX_CONTEXT_MAPPED_PAGES +
           MMIX_CONTEXT_NEW_TABLE_PAGES)
     panic("context pages");
+}
+
+void
+mmix_kcontext_prepare(struct context *context, uint slot, void (*entry)(void))
+{
+  struct mmix_initial_context *initial;
+  uint64 register_base;
+  uint64 software_top;
+
+  if (context == 0 || entry == 0 || ((uint64)entry & 3) != 0 ||
+      slot >= MMIX_CONTEXT_SLOT_COUNT)
+    panic("context prepare");
+
+  register_base = MMIX_CONTEXT_REGISTER_STACK_BASE(slot);
+  software_top = MMIX_CONTEXT_SOFTWARE_STACK_TOP(slot);
+  if (!context_mapping_matches(register_base, context_register_pa[slot]) ||
+      !context_mapping_matches(MMIX_CONTEXT_SOFTWARE_STACK_BASE(slot),
+                               context_software_pa[slot]))
+    panic("context backing");
+
+  initial = (struct mmix_initial_context *)register_base;
+  memset(initial, 0, sizeof(*initial));
+  initial->globals[MMIX_ABI_FP - MMIX_ABI_GLOBAL_FIRST] = software_top;
+  initial->globals[MMIX_ABI_SP - MMIX_ABI_GLOBAL_FIRST] = software_top;
+  initial->rj = (uint64)entry;
+  initial->rg_ra = (uint64)MMIX_ABI_GLOBAL_FIRST << 56;
+  context->state = register_base + MMIX_CONTEXT_INITIAL_STATE_OFFSET;
 }

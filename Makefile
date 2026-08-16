@@ -10,6 +10,7 @@ OBJS = \
   $K/bootinfo.o \
   $K/cpu.o \
   $K/kcontext.o \
+  $K/swtch.o \
   $K/early_selftest.o \
   $K/intc.o \
   $K/timer.o \

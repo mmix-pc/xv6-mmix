@@ -117,7 +117,11 @@
 
 // Assembly-visible kernel trap-state layout. Global register offsets are
 // computed from their architectural register numbers.
-#define MMIX_TRAP_GLOBAL_FIRST 231
+#define MMIX_ABI_GLOBAL_FIRST 231
+#define MMIX_ABI_FP           253
+#define MMIX_ABI_SP           254
+
+#define MMIX_TRAP_GLOBAL_FIRST MMIX_ABI_GLOBAL_FIRST
 #define MMIX_TRAP_GLOBAL_LAST  254
 #define MMIX_TRAP_GLOBAL_COUNT                                               \
   (MMIX_TRAP_GLOBAL_LAST - MMIX_TRAP_GLOBAL_FIRST + 1)
@@ -159,6 +163,13 @@
 #define MMIX_CONTEXT_STATE_OFFSET 0
 #define MMIX_CONTEXT_SIZE         8
 #define MMIX_CONTEXT_ALIGN        8
+
+// The C ABI fixes rG at $231, with $253 as frame pointer and $254 as the
+// downward-growing software-stack pointer. A new context record contains an
+// outer POP hole, the empty-local SAVE hole, globals, twelve special
+// registers, and the packed rG/rA octa addressed by context.state.
+#define MMIX_CONTEXT_INITIAL_STATE_OFFSET 312
+#define MMIX_CONTEXT_INITIAL_SIZE         320
 
 // The entry mechanism classifies the architectural saved state before it
 // crosses the C dispatch boundary.
