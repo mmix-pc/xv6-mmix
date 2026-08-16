@@ -11,6 +11,7 @@ OBJS = \
   $K/cpu.o \
   $K/early_selftest.o \
   $K/intc.o \
+  $K/timer.o \
   $K/kalloc.o \
   $K/spinlock.o \
   $K/string.o \
