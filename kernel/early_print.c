@@ -111,6 +111,30 @@ mmix_early_print_paging(uint64 rv)
 }
 
 void
+mmix_early_print_trap(const struct mmix_trap_diagnostic *diagnostic)
+{
+  early_puts("kernel trap: class=");
+  early_puts(diagnostic->event_class);
+  early_puts(" cause=");
+  early_puts(diagnostic->cause);
+  early_puts("\nrq=");
+  early_put_hex64(diagnostic->rq);
+  early_puts(" rk=");
+  early_put_hex64(diagnostic->active_rk);
+  early_puts(" restore-rk=");
+  early_put_hex64(diagnostic->restore_rk);
+  early_puts("\nrww=");
+  early_put_hex64(diagnostic->rww);
+  early_puts(" rxx=");
+  early_put_hex64(diagnostic->rxx);
+  early_puts("\nryy=");
+  early_put_hex64(diagnostic->ryy);
+  early_puts(" rzz=");
+  early_put_hex64(diagnostic->rzz);
+  mmix_early_uart_putc('\n');
+}
+
+void
 panic(char *message)
 {
   early_puts("panic: ");

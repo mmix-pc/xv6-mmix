@@ -3,6 +3,19 @@
 #include "early_print.h"
 
 struct cpu cpus[NCPU];
+uint64 mmix_trap_rk_shadow;
+
+void
+mmix_intr_mask_write(uint64 mask)
+{
+  if (mask == 0) {
+    mmix_rk_write(0);
+    mmix_trap_rk_shadow = 0;
+  } else {
+    mmix_trap_rk_shadow = mask;
+    mmix_rk_write(mask);
+  }
+}
 
 // The current kernel boots exactly one CPU and assigns it ID 0.
 int
@@ -27,10 +40,11 @@ intr_get(void)
 void
 intr_off(void)
 {
-  mmix_intr_off();
+  mmix_intr_mask_write(0);
 }
 
-// Dynamic traps do not have a handler yet, so enabling them is unsafe.
+// External dynamic interrupts do not have a handler yet, so enabling them is
+// unsafe. The trap module manages its program-cause mask separately.
 void
 intr_on(void)
 {

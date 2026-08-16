@@ -111,6 +111,10 @@
 // dynamic traps.
 #define MMIX_DYNAMIC_TRAP_RESUME_NEXT 0x8000000000000000
 
+// TRAP 0,Y,Z is reserved for semihosting. The kernel uses this exact
+// nonzero-X instruction when it deliberately requests a resumable trap.
+#define MMIX_KERNEL_FORCED_TRAP_INSN 0x00010000
+
 // Assembly-visible kernel trap-state layout. Global register offsets are
 // computed from their architectural register numbers.
 #define MMIX_TRAP_GLOBAL_FIRST 231
@@ -142,6 +146,11 @@
 #define MMIX_TRAP_RF_OFFSET         344
 #define MMIX_TRAP_STATE_SIZE        352
 #define MMIX_TRAP_STATE_ALIGN       8
+
+// The linked -O0 entry and deepest terminal diagnostic use less than 640
+// bytes together. Keep one KiB available and re-audit this reserve whenever
+// the compiler options or diagnostic call graph changes.
+#define MMIX_TRAP_STACK_RESERVE 1024
 
 #define MMIX_TRAP_VECTOR_ALIGN 16
 
@@ -424,6 +433,9 @@ mmix_rk_write(uint64 value)
   asm volatile("PUT rK, %0" : : "r"(value) : "memory");
 }
 
+extern uint64 mmix_trap_rk_shadow;
+void mmix_intr_mask_write(uint64 mask);
+
 static inline uint64
 mmix_rq_program(uint64 value)
 {
@@ -460,15 +472,6 @@ mmix_intr_get(void)
   return mmix_rk_read() != 0;
 }
 
-// The current kernel keeps dynamic interrupts disabled, so only the masking
-// operation is exposed here. Trap initialization will define the eventual
-// enable policy.
-static inline void
-mmix_intr_off(void)
-{
-  mmix_rk_write(0);
-}
-
 // SYNC 6 is the architectural full translation-cache invalidation. Current
 // QEMU also requires rewriting rV to flush its software TLB after a live PTE
 // change; the same sequence performs the initial transition out of flat mode.
@@ -486,6 +489,8 @@ _Static_assert(MMIX_KERNEL_PROGRAM_MASK == 0x000000e400000000,
                "kernel program mask must match the trap ABI");
 _Static_assert(MMIX_KERNEL_TRAP_MASK == 0x000000e400000100,
                "kernel trap mask must match the platform ABI");
+_Static_assert((MMIX_KERNEL_FORCED_TRAP_INSN & MMIX_RQ_PROGRAM_MASK) == 0,
+               "kernel forced trap must not resemble a program cause");
 _Static_assert((MMIX_RQ_PROGRAM_MASK & MMIX_RQ_INTC) == 0,
                "program and controller requests must not overlap");
 _Static_assert((KERNEL_LOAD & (MMIX_TRAP_VECTOR_ALIGN - 1)) == 0 &&
@@ -556,6 +561,8 @@ MMIX_ASSERT_TRAP_OFFSET(rf, MMIX_TRAP_RF_OFFSET);
 
 _Static_assert(sizeof(struct mmix_trap_state) == MMIX_TRAP_STATE_SIZE,
                "MMIX trap-state size mismatch");
+_Static_assert(MMIX_TRAP_STACK_RESERVE >= MMIX_TRAP_STATE_SIZE,
+               "MMIX trap stack reserve cannot hold the saved state");
 _Static_assert(__alignof__(struct mmix_trap_state) == MMIX_TRAP_STATE_ALIGN,
                "MMIX trap-state alignment mismatch");
 _Static_assert(PGSIZE == 0x2000, "MMIX pages must be 8 KiB");

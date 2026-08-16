@@ -77,8 +77,8 @@ SECTIONS
          "MMIX trap state is outside kernel writable storage")
   ASSERT(kernel_end <= 0x05ffe000,
          "kernel overlaps the bootstrap stack")
-  ASSERT(0x05ffe000 + 352 < 0x06000000,
-         "bootstrap stack cannot hold an MMIX trap state")
+  ASSERT(0x05ffe000 + 1024 < 0x06000000,
+         "bootstrap stack cannot hold the MMIX trap path")
   ASSERT(0x00008000 <= 0x00010000 && 0x00010000 < 0x00100000,
          "MMIX register-stack backing range is invalid")
 
