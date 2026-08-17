@@ -11,10 +11,11 @@
 
 extern struct proc proc[NPROC];
 
-struct proc *initproc;
+struct proc *proc_alloc(void (*)(void));
+void proc_start(struct proc *);
+void proc_release(struct proc *);
 
-int nextpid = 1;
-struct spinlock pid_lock;
+struct proc *initproc;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -27,19 +28,6 @@ extern char trampoline[]; // trampoline.S
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
 
-int
-allocpid()
-{
-  int pid;
-
-  acquire(&pid_lock);
-  pid = nextpid;
-  nextpid = nextpid + 1;
-  release(&pid_lock);
-
-  return pid;
-}
-
 // Look in the process table for an UNUSED proc.
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
@@ -47,21 +35,10 @@ allocpid()
 static struct proc *
 allocproc(void)
 {
-  struct proc *p;
+  struct proc *p = proc_alloc(forkret);
 
-  for (p = proc; p < &proc[NPROC]; p++) {
-    acquire(&p->lock);
-    if (p->state == UNUSED) {
-      goto found;
-    } else {
-      release(&p->lock);
-    }
-  }
-  return 0;
-
-found:
-  p->pid = allocpid();
-  p->state = USED;
+  if (p == 0)
+    return 0;
 
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -77,12 +54,6 @@ found:
     release(&p->lock);
     return 0;
   }
-
-  // Set up new context to start executing at forkret,
-  // which returns to user space.
-  memset(&p->context, 0, sizeof(p->context));
-  p->context.ra = (uint64)forkret;
-  p->context.sp = p->kstack + PGSIZE;
 
   return p;
 }
@@ -100,13 +71,7 @@ freeproc(struct proc *p)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
   p->sz = 0;
-  p->pid = 0;
-  p->parent = 0;
-  p->name[0] = 0;
-  p->chan = 0;
-  p->killed = 0;
-  p->xstate = 0;
-  p->state = UNUSED;
+  proc_release(p);
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -164,9 +129,7 @@ userinit(void)
 
   p->cwd = namei("/");
 
-  p->state = RUNNABLE;
-
-  release(&p->lock);
+  proc_start(p);
 }
 
 // Grow or shrink user memory by n bytes.
@@ -237,8 +200,7 @@ kfork(void)
   release(&wait_lock);
 
   acquire(&np->lock);
-  np->state = RUNNABLE;
-  release(&np->lock);
+  proc_start(np);
 
   return pid;
 }
@@ -386,55 +348,6 @@ forkret(void)
   uint64 satp = MAKE_SATP(p->pagetable);
   uint64 trampoline_userret = TRAMPOLINE + (userret - trampoline);
   ((void (*)(uint64))trampoline_userret)(satp);
-}
-
-// Sleep on channel chan, releasing condition lock lk.
-// Re-acquires lk when awakened.
-void
-sleep(void *chan, struct spinlock *lk)
-{
-  struct proc *p = myproc();
-
-  // Must acquire p->lock in order to
-  // change p->state and then call sched.
-  // Once we hold p->lock, we can be
-  // guaranteed that we won't miss any wakeup
-  // (wakeup locks p->lock),
-  // so it's okay to release lk.
-
-  acquire(&p->lock); //DOC: sleeplock1
-  release(lk);
-
-  // Go to sleep.
-  p->chan = chan;
-  p->state = SLEEPING;
-
-  sched();
-
-  // Tidy up.
-  p->chan = 0;
-
-  // Reacquire original lock.
-  release(&p->lock);
-  acquire(lk);
-}
-
-// Wake up all processes sleeping on channel chan.
-// Caller should hold the condition lock.
-void
-wakeup(void *chan)
-{
-  struct proc *p;
-
-  for (p = proc; p < &proc[NPROC]; p++) {
-    if (p != myproc()) {
-      acquire(&p->lock);
-      if (p->state == SLEEPING && p->chan == chan) {
-        p->state = RUNNABLE;
-      }
-      release(&p->lock);
-    }
-  }
 }
 
 // Kill the process with the given pid.
