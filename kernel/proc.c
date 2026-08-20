@@ -152,13 +152,11 @@ scheduler(void)
 
   c->proc = 0;
   for (;;) {
-    // Allow pending work to be delivered, then close the switch window before
-    // inspecting process state or changing stack ownership.
-    intr_on();
-    intr_off();
-
     int found = 0;
     for (p = proc; p < &proc[NPROC]; p++) {
+      // No process or process stack is owned here. Enable timer delivery before
+      // acquire() closes the state-transition and context-switch window.
+      intr_on();
       acquire(&p->lock);
       if (p->state == RUNNABLE) {
         p->state = RUNNING;

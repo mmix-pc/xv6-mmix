@@ -1,8 +1,12 @@
 #include "memlayout.h"
 #include "mmix.h"
+#include "cpu.h"
+#include "spinlock.h"
+#include "proc.h"
 #include "early_print.h"
 #include "intc.h"
 #include "timer.h"
+#include "defs.h"
 
 extern char kernel_text_end[];
 extern char mmix_kernel_trap_entry[];
@@ -74,6 +78,30 @@ trap_stop(enum mmix_trap_class event, const char *cause,
 }
 
 static void
+trap_preempt(struct mmix_trap_state *state, uint32 claim)
+{
+  struct cpu *c = mycpu();
+  struct proc *p = c->proc;
+
+  // A scheduler or idle tick is accounted above but has no process to yield.
+  if (p == 0)
+    return;
+  if (p->state != RUNNING || c->noff != 0)
+    trap_stop(MMIX_TRAP_EXTERNAL, "unsafe preemption", state, claim);
+
+  // This trap remains on p's stacks while yield() runs another process. Let
+  // that process take traps, then reclaim the single-CPU trap entry on return.
+  // Complete the rQ handoff now because the assembly restore is also suspended.
+  mmix_rq_write(state->rq);
+  mmix_trap_active = 0;
+  yield();
+  if (mmix_trap_active != 0 || mmix_rk_read() != 0)
+    trap_stop(MMIX_TRAP_EXTERNAL, "preemption resume", state, claim);
+  mmix_trap_rk_shadow = state->restore_rk;
+  mmix_trap_active = 1;
+}
+
+static void
 trap_external(struct mmix_trap_state *state)
 {
   uint32 irq = 0;
@@ -107,6 +135,8 @@ trap_external(struct mmix_trap_state *state)
   // GET/PUT rQ is a request handoff. Do not restore the serviced controller
   // bit or RESUME would immediately deliver the same dynamic trap again.
   state->rq &= ~MMIX_RQ_INTC;
+
+  trap_preempt(state, irq);
 }
 
 void
