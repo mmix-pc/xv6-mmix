@@ -185,6 +185,11 @@
 #define MMIX_CONTEXT_INITIAL_STATE_OFFSET 312
 #define MMIX_CONTEXT_INITIAL_SIZE         320
 
+// Offset of a C ABI global in a SAVE record addressed by its final rG/rA
+// octa. With rG=231, $231 begins 296 bytes before the returned state pointer.
+#define MMIX_SAVED_GLOBAL_OFFSET(reg)                                         \
+  (-((12 + (256 - (reg))) * 8))
+
 // The entry mechanism classifies the architectural saved state before it
 // crosses the C dispatch boundary.
 #define MMIX_TRAP_CLASS_UNKNOWN  0
@@ -604,6 +609,8 @@ _Static_assert(MMIX_TRAP_STACK_RESERVE >= MMIX_TRAP_STATE_SIZE,
                "MMIX trap stack reserve cannot hold the saved state");
 _Static_assert(__alignof__(struct mmix_trap_state) == MMIX_TRAP_STATE_ALIGN,
                "MMIX trap-state alignment mismatch");
+_Static_assert(MMIX_SAVED_GLOBAL_OFFSET(MMIX_ABI_GLOBAL_FIRST) == -296,
+               "saved syscall result offset must match the MMIX C ABI");
 _Static_assert(PGSIZE == 0x2000, "MMIX pages must be 8 KiB");
 _Static_assert(MMIX_PT_ENTRIES * sizeof(pte_t) == PGSIZE,
                "one page-table block must contain 1024 octas");

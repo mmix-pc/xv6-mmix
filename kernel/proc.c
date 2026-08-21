@@ -1,15 +1,87 @@
 #include "types.h"
 #include "param.h"
+#include "memlayout.h"
 #include "mmix.h"
 #include "spinlock.h"
 #include "proc.h"
 #include "kcontext.h"
+#include "kalloc.h"
+#include "vm.h"
 #include "defs.h"
+
+enum {
+  MMIX_USER_INITIAL_GLOBAL_COUNT = 256 - MMIX_ABI_GLOBAL_FIRST,
+};
+
+struct mmix_initial_user_context {
+  uint64 outer_hole;
+  uint64 local_hole;
+  uint64 globals[MMIX_USER_INITIAL_GLOBAL_COUNT];
+  uint64 rb;
+  uint64 rd;
+  uint64 re;
+  uint64 rh;
+  uint64 rj;
+  uint64 rm;
+  uint64 rr;
+  uint64 rp;
+  uint64 rw;
+  uint64 rx;
+  uint64 ry;
+  uint64 rz;
+  uint64 rg_ra;
+};
+
+_Static_assert(__builtin_offsetof(struct mmix_initial_user_context, rg_ra) ==
+                 MMIX_CONTEXT_INITIAL_STATE_OFFSET,
+               "MMIX initial user state offset mismatch");
+_Static_assert(sizeof(struct mmix_initial_user_context) ==
+                 MMIX_CONTEXT_INITIAL_SIZE,
+               "MMIX initial user state size mismatch");
+_Static_assert(NPROC == MMIX_USER_ASN_LAST - MMIX_USER_ASN_FIRST + 1,
+               "process slots must have one MMIX user ASN each");
 
 struct proc proc[NPROC];
 
 static int nextpid = 1;
 static struct spinlock pid_lock;
+
+static uint
+proc_index(struct proc *p)
+{
+  if (p < proc || p >= &proc[NPROC])
+    panic("proc user slot");
+  return (uint)(p - proc);
+}
+
+static int
+user_mapping_has(pagetable_t pagetable, uint64 va, uint64 permissions)
+{
+  pte_t *leaf = walk(pagetable, va, 0);
+
+  return leaf != 0 &&
+         *leaf == mmix_pte_make(mmix_pte_pa(*leaf),
+                                MMIX_RV_N(pagetable->rv),
+                                mmix_pte_permissions(*leaf)) &&
+         kalloc_page_is_managed((void *)mmix_pte_pa(*leaf)) &&
+         (mmix_pte_permissions(*leaf) & permissions) == permissions;
+}
+
+static int
+user_stacks_valid(pagetable_t pagetable)
+{
+  for (uint64 va = MMIX_USER_STACK_BASE; va < MMIX_USER_STACK_TOP;
+       va += PGSIZE)
+    if (!user_mapping_has(pagetable, va, PTE_R | PTE_W))
+      return 0;
+  for (uint64 va = MMIX_USER_REGISTER_STACK_BASE;
+       va < MMIX_USER_REGISTER_STACK_TOP; va += PGSIZE)
+    if (!user_mapping_has(pagetable, va, PTE_R | PTE_W))
+      return 0;
+  return walk(pagetable, MMIX_USER_STACK_GUARD_BASE, 0) == 0 &&
+         walk(pagetable, MMIX_USER_REGISTER_GUARD_BASE, 0) == 0 &&
+         walk(pagetable, MMIX_USER_REGISTER_GUARD_TOP - PGSIZE, 0) == 0;
+}
 
 static int
 allocpid(void)
@@ -64,7 +136,7 @@ proc_clear(struct proc *p, int clear_context)
 
 // Allocate a process-table slot and its initial kernel context. Return with the
 // slot lock held so the caller can finish initialization before publication.
-struct proc *
+static struct proc *
 proc_alloc(void (*entry)(void))
 {
   struct proc *p;
@@ -100,7 +172,7 @@ proc_start(struct proc *p)
 }
 
 // Release a process slot after its caller has freed all attached resources.
-void
+static void
 proc_release(struct proc *p)
 {
   if (p == 0 || !holding(&p->lock) ||
@@ -128,6 +200,214 @@ procinit(void)
     p->state = UNUSED;
     p->kstack = KSTACK((int)(p - proc));
   }
+}
+
+pagetable_t
+proc_pagetable(struct proc *p)
+{
+  uint index;
+
+  if (p == 0 || !holding(&p->lock) || p->state != USED ||
+      p->pagetable != 0)
+    panic("proc pagetable");
+  index = proc_index(p);
+  return uvmcreate(MMIX_USER_ASN_FIRST + index);
+}
+
+void
+proc_freepagetable(pagetable_t pagetable, uint64 sz)
+{
+  if (pagetable == 0)
+    panic("proc free pagetable");
+  uvmfree(pagetable, sz);
+}
+
+static void
+proc_user_free(struct proc *p)
+{
+  if (p == 0 || !holding(&p->lock) ||
+      (p->state != USED && p->state != ZOMBIE))
+    panic("proc user free");
+  if (p->pagetable != 0) {
+    proc_freepagetable(p->pagetable, p->sz);
+    p->pagetable = 0;
+  }
+  p->sz = 0;
+  if (p->trapframe != 0) {
+    kfree(p->trapframe);
+    p->trapframe = 0;
+  }
+  proc_release(p);
+}
+
+static int
+proc_user_resources(struct proc *p, int allocate_stacks)
+{
+  if ((p->trapframe = kalloc()) == 0)
+    return -1;
+  memset(p->trapframe, 0, PGSIZE);
+
+  p->pagetable = proc_pagetable(p);
+  if (p->pagetable == 0)
+    return -1;
+  p->sz = MMIX_USER_IMAGE_BASE;
+  p->trapframe->user_rv = p->pagetable->rv;
+  p->trapframe->user_rk = MMIX_PROC_USER_RK;
+
+  if (allocate_stacks && uvmallocstacks(p->pagetable) < 0)
+    return -1;
+  return 0;
+}
+
+static struct proc *
+proc_user_alloc_internal(void (*kernel_entry)(void), int allocate_stacks)
+{
+  struct proc *p = proc_alloc(kernel_entry);
+
+  if (p == 0)
+    return 0;
+  if (proc_user_resources(p, allocate_stacks) < 0) {
+    proc_user_free(p);
+    release(&p->lock);
+    return 0;
+  }
+  return p;
+}
+
+// Allocate a complete, unpublished user process. The returned process is in
+// USED state with its lock held; its image may be populated before proc_start.
+static __attribute__((used)) struct proc *
+proc_user_alloc(void (*kernel_entry)(void))
+{
+  return proc_user_alloc_internal(kernel_entry, 1);
+}
+
+// User entry will consume this once the trap return path is connected.
+static __attribute__((used)) int
+proc_user_init(struct proc *p, uint64 entry)
+{
+  struct mmix_initial_user_context initial;
+
+  if (p == 0 || !holding(&p->lock) || p->state != USED ||
+      p->pagetable == 0 || p->trapframe == 0 ||
+      p->trapframe->user_state != 0 || entry < MMIX_USER_IMAGE_BASE ||
+      entry >= p->sz || !user_mapping_has(p->pagetable, entry, PTE_X) ||
+      !user_stacks_valid(p->pagetable))
+    return -1;
+
+  memset(&initial, 0, sizeof(initial));
+  initial.globals[MMIX_ABI_FP - MMIX_ABI_GLOBAL_FIRST] =
+    MMIX_USER_STACK_TOP;
+  initial.globals[MMIX_ABI_SP - MMIX_ABI_GLOBAL_FIRST] =
+    MMIX_USER_STACK_TOP;
+  initial.rj = entry;
+  initial.rg_ra = (uint64)MMIX_ABI_GLOBAL_FIRST << 56;
+  if (copyout(p->pagetable, MMIX_USER_REGISTER_STACK_BASE, (char *)&initial,
+              sizeof(initial)) < 0)
+    return -1;
+
+  memset(p->trapframe, 0, sizeof(*p->trapframe));
+  p->trapframe->user_state =
+    MMIX_USER_REGISTER_STACK_BASE + MMIX_CONTEXT_INITIAL_STATE_OFFSET;
+  p->trapframe->user_rv = p->pagetable->rv;
+  p->trapframe->user_rk = MMIX_PROC_USER_RK;
+  p->trapframe->rww = entry;
+  p->trapframe->rxx = MMIX_DYNAMIC_TRAP_RESUME_NEXT;
+  return 0;
+}
+
+static int
+proc_user_set_result(struct proc *p, uint64 value)
+{
+  uint64 state;
+  uint64 address;
+
+  if (p == 0 || p->trapframe == 0)
+    return -1;
+  state = p->trapframe->user_state;
+  if ((state & (sizeof(uint64) - 1)) != 0 ||
+      state < MMIX_USER_REGISTER_STACK_BASE -
+                MMIX_SAVED_GLOBAL_OFFSET(MMIX_ABI_GLOBAL_FIRST) ||
+      state >= MMIX_USER_REGISTER_STACK_TOP)
+    return -1;
+  address = state + MMIX_SAVED_GLOBAL_OFFSET(MMIX_ABI_GLOBAL_FIRST);
+  return copyout(p->pagetable, address, (char *)&value, sizeof(value));
+}
+
+// Clone only architecture-neutral process state. File descriptors, cwd,
+// parent linkage, and scheduler publication remain the caller's responsibility.
+// The returned child is in USED state with its lock held.
+static __attribute__((used)) struct proc *
+proc_user_clone(struct proc *parent, void (*kernel_entry)(void))
+{
+  struct proc *child;
+
+  if (parent == 0 || parent->pagetable == 0 || parent->trapframe == 0 ||
+      parent->sz < MMIX_USER_IMAGE_BASE ||
+      parent->trapframe->user_state == 0 ||
+      parent->trapframe->user_rv != parent->pagetable->rv ||
+      parent->trapframe->user_rk != MMIX_PROC_USER_RK)
+    return 0;
+
+  child = proc_user_alloc_internal(kernel_entry, 0);
+  if (child == 0)
+    return 0;
+  if (uvmcopy(parent->pagetable, child->pagetable, parent->sz) < 0)
+    goto fail;
+
+  child->sz = parent->sz;
+  *child->trapframe = *parent->trapframe;
+  child->trapframe->kernel_state = 0;
+  child->trapframe->user_rv = child->pagetable->rv;
+  child->trapframe->user_rk = MMIX_PROC_USER_RK;
+  child->trapframe->rq = 0;
+  child->trapframe->flags = 0;
+  child->trapframe->reserved = 0;
+  if (proc_user_set_result(child, 0) < 0)
+    goto fail;
+  safestrcpy(child->name, parent->name, sizeof(child->name));
+  return child;
+
+fail:
+  proc_user_free(child);
+  release(&child->lock);
+  return 0;
+}
+
+static int
+proc_user_grow(struct proc *p, int n)
+{
+  uint64 oldsz;
+  uint64 newsz;
+
+  if (p == 0 || p->pagetable == 0 || p->sz < MMIX_USER_IMAGE_BASE)
+    return -1;
+  oldsz = p->sz;
+  if (n > 0) {
+    if ((uint64)n > MMIX_USER_HEAP_LIMIT - oldsz)
+      return -1;
+    newsz = oldsz + (uint64)n;
+    if (uvmalloc(p->pagetable, oldsz, newsz, PTE_W) == 0)
+      return -1;
+  } else if (n < 0) {
+    uint64 amount = (uint64)(-(long)n);
+
+    if (amount > oldsz - MMIX_USER_IMAGE_BASE)
+      return -1;
+    newsz = oldsz - amount;
+    if (uvmdealloc(p->pagetable, oldsz, newsz) != newsz)
+      return -1;
+  } else {
+    return 0;
+  }
+  p->sz = newsz;
+  return 0;
+}
+
+int
+growproc(int n)
+{
+  return proc_user_grow(myproc(), n);
 }
 
 // Return the current struct proc *, or zero if none.
@@ -262,4 +542,64 @@ wakeup(void *chan)
       release(&p->lock);
     }
   }
+}
+
+int
+kkill(int pid)
+{
+  struct proc *p;
+
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->pid == pid && p->state != UNUSED) {
+      p->killed = 1;
+      if (p->state == SLEEPING)
+        p->state = RUNNABLE;
+      release(&p->lock);
+      return 0;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+void
+setkilled(struct proc *p)
+{
+  acquire(&p->lock);
+  p->killed = 1;
+  release(&p->lock);
+}
+
+int
+killed(struct proc *p)
+{
+  int value;
+
+  acquire(&p->lock);
+  value = p->killed;
+  release(&p->lock);
+  return value;
+}
+
+int
+either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
+{
+  struct proc *p = myproc();
+
+  if (user_dst)
+    return p == 0 ? -1 : copyout(p->pagetable, dst, src, len);
+  memmove((void *)dst, src, len);
+  return 0;
+}
+
+int
+either_copyin(void *dst, int user_src, uint64 src, uint64 len)
+{
+  struct proc *p = myproc();
+
+  if (user_src)
+    return p == 0 ? -1 : copyin(p->pagetable, dst, src, len);
+  memmove(dst, (void *)src, len);
+  return 0;
 }
