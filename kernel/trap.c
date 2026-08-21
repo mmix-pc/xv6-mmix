@@ -4,7 +4,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "kalloc.h"
-#include "early_print.h"
+#include "diagnostic.h"
 #include "intc.h"
 #include "timer.h"
 #include "defs.h"
@@ -64,7 +64,7 @@ trap_report(enum mmix_trap_class event, const char *cause,
     .timer_pending = timer_pending,
   };
 
-  mmix_early_print_trap(&diagnostic);
+  mmix_diagnostic_trap(&diagnostic);
 }
 
 static void trap_stop(enum mmix_trap_class event, const char *cause,
@@ -112,12 +112,14 @@ trap_preempt(struct mmix_trap_state *state, uint32 claim)
 }
 
 static const char *
-trap_timer_service(uint64 rq, uint64 restore_rk, uint64 rxx, uint32 *claim)
+trap_device_service(uint64 rq, uint64 restore_rk, uint64 rxx, uint32 *claim,
+                    int *preempt)
 {
   int pending;
   int status;
 
   *claim = 0;
+  *preempt = 0;
   if (!mmix_rq_intc_pending(rq, restore_rk))
     return "masked request";
   if (rxx != MMIX_DYNAMIC_TRAP_RESUME_NEXT)
@@ -128,6 +130,12 @@ trap_timer_service(uint64 rq, uint64 restore_rk, uint64 rxx, uint32 *claim)
     return "zero claim";
   if (status != MMIX_INTC_OK)
     return "invalid claim";
+  if (*claim == UART0_IRQ) {
+    uartintr();
+    if (mmix_intc_complete(*claim) != MMIX_INTC_OK)
+      return "controller complete";
+    return 0;
+  }
   if (*claim != MMIX_TIMER_IRQ)
     return "unexpected claim";
   if (mmix_timer_pending(&pending) != MMIX_TIMER_OK || !pending)
@@ -145,6 +153,7 @@ trap_timer_service(uint64 rq, uint64 restore_rk, uint64 rxx, uint32 *claim)
   ticks++;
   wakeup(&ticks);
   release(&tickslock);
+  *preempt = 1;
 
   return 0;
 }
@@ -153,9 +162,11 @@ static void
 trap_external(struct mmix_trap_state *state)
 {
   uint32 irq;
+  int preempt;
   const char *error;
 
-  error = trap_timer_service(state->rq, state->restore_rk, state->rxx, &irq);
+  error = trap_device_service(state->rq, state->restore_rk, state->rxx, &irq,
+                              &preempt);
   if (error != 0)
     trap_stop(MMIX_TRAP_EXTERNAL, error, state, irq);
 
@@ -163,7 +174,8 @@ trap_external(struct mmix_trap_state *state)
   // bit or RESUME would immediately deliver the same dynamic trap again.
   state->rq &= ~MMIX_RQ_INTC;
 
-  trap_preempt(state, irq);
+  if (preempt)
+    trap_preempt(state, irq);
 }
 
 static void
@@ -213,7 +225,7 @@ user_trap_report(const char *cause, struct proc *p, uint32 claim)
     .timer_pending = timer_pending,
   };
 
-  mmix_early_print_trap(&diagnostic);
+  mmix_diagnostic_trap(&diagnostic);
 }
 
 static void
@@ -310,8 +322,9 @@ usertrap(void)
   } else if (trapframe->rxx == MMIX_DYNAMIC_TRAP_RESUME_NEXT &&
              mmix_rq_intc_pending(trapframe->rq, trapframe->user_rk)) {
     uint32 irq;
-    const char *error = trap_timer_service(
-      trapframe->rq, trapframe->user_rk, trapframe->rxx, &irq);
+    int preempt;
+    const char *error = trap_device_service(
+      trapframe->rq, trapframe->user_rk, trapframe->rxx, &irq, &preempt);
 
     if (error != 0)
       user_trap_stop(error, p, irq);
@@ -321,7 +334,8 @@ usertrap(void)
     mmix_rq_write(trapframe->rq);
     if (killed(p))
       kexit(-1);
-    yield();
+    if (preempt)
+      yield();
   } else {
     int is_syscall = user_syscall_trap(p);
 

@@ -18,9 +18,8 @@
 #include "fs.h"
 #include "file.h"
 #include "memlayout.h"
-#include "riscv.h"
-#include "defs.h"
 #include "proc.h"
+#include "defs.h"
 
 #define BACKSPACE 0x100       // erase the last output character
 #define C(x)      ((x) - '@') // Control-x
@@ -54,6 +53,10 @@ struct {
   uint w; // Write index
   uint e; // Edit index
 } cons;
+
+// FIXME: Move this table back to file.c when that module joins the production
+// link. Device drivers publish their file-operation entry points here.
+struct devsw devsw[NDEV];
 
 //
 // user write() system calls to the console go here.

@@ -11,12 +11,13 @@
 #include "fs.h"
 #include "file.h"
 #include "memlayout.h"
-#include "riscv.h"
-#include "defs.h"
+#include "mmix.h"
 #include "proc.h"
+#include "defs.h"
+#include "printk.h"
 
-volatile int panicking = 0; // printing a panic message
-volatile int panicked = 0;  // spinning forever at end of a panic
+volatile int panicking; // printing a panic message
+volatile int panicked;  // spinning forever at end of a panic
 
 // lock to avoid interleaving concurrent printk's.
 static struct {
@@ -137,6 +138,7 @@ printk(char *fmt, ...)
 void
 panic(char *s)
 {
+  mmix_intr_mask_write(0);
   panicking = 1;
   printk("panic: ");
   printk("%s\n", s);

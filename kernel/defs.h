@@ -148,6 +148,7 @@ void            usertrapret(void);
 
 // uart.c
 void            uartinit(void);
+void            uartenable(void);
 void            uartintr(void);
 void            uartwrite(char [], int);
 void            uartputc_sync(int);

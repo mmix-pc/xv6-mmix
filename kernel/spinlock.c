@@ -5,7 +5,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "cpu.h"
-#include "early_print.h"
+#include "printk.h"
 
 int holding(struct spinlock *);
 void push_off(void);

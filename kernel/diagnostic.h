@@ -1,5 +1,5 @@
-#ifndef XV6_MMIX_EARLY_PRINT_H
-#define XV6_MMIX_EARLY_PRINT_H
+#ifndef XV6_MMIX_DIAGNOSTIC_H
+#define XV6_MMIX_DIAGNOSTIC_H
 
 struct mmix_boot_state;
 
@@ -25,9 +25,8 @@ struct mmix_trap_diagnostic {
   int timer_pending;
 };
 
-void mmix_early_print_boot(const struct mmix_boot_state *boot);
-void mmix_early_print_paging(uint64 rv);
-void mmix_early_print_trap(const struct mmix_trap_diagnostic *diagnostic);
-void panic(char *message) __attribute__((noreturn));
+void mmix_diagnostic_boot(const struct mmix_boot_state *boot);
+void mmix_diagnostic_paging(uint64 rv);
+void mmix_diagnostic_trap(const struct mmix_trap_diagnostic *diagnostic);
 
 #endif

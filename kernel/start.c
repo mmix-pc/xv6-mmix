@@ -1,9 +1,10 @@
 #include "boot.h"
 #include "kcontext.h"
 #include "cpu.h"
-#include "early_print.h"
+#include "diagnostic.h"
 #include "early_selftest.h"
 #include "early_uart.h"
+#include "printk.h"
 #include "intc.h"
 #include "kalloc.h"
 #include "memlayout.h"
@@ -16,6 +17,8 @@ void trapinithart(void);
 void procinit(void);
 void scheduler(void) __attribute__((noreturn));
 void swtch(struct context *, struct context *);
+void consoleinit(void);
+void uartenable(void);
 
 struct mmix_boot_state mmix_boot;
 
@@ -31,7 +34,7 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
     mmix_bootinfo_decode(startup_cpu_id, bootinfo_pa, &mmix_boot.info);
 
   mmix_early_uart_init();
-  mmix_early_print_boot(&mmix_boot);
+  mmix_diagnostic_boot(&mmix_boot);
   kinit();
   mmix_early_selftest();
   bootinfo_status = mmix_boot.bootinfo_status;
@@ -45,6 +48,8 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
   trapinithart();
   if (mmix_intc_init() != MMIX_INTC_OK)
     panic("intc init");
+  consoleinit();
+  printkinit();
   if (mmix_timer_init() != MMIX_TIMER_OK)
     panic("timer init");
   if (mmix_boot.bootinfo_status != bootinfo_status)
@@ -53,6 +58,7 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
     panic("timer arm");
   if (mmix_intc_set_enabled(MMIX_TIMER_IRQ, 1) != MMIX_INTC_OK)
     panic("timer irq enable");
+  uartenable();
   intr_off();
   swtch(&boot_context, &cpus[BOOT_CPU_ID].context);
   panic("scheduler returned");

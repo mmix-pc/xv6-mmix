@@ -41,6 +41,7 @@ _Static_assert(sizeof(struct mmix_initial_user_context) ==
 _Static_assert(NPROC == MMIX_USER_ASN_LAST - MMIX_USER_ASN_FIRST + 1,
                "process slots must have one MMIX user ASN each");
 
+struct cpu cpus[NCPU];
 struct proc proc[NPROC];
 
 static int nextpid = 1;
@@ -490,6 +491,20 @@ growproc(int n)
   return proc_user_grow(myproc(), n);
 }
 
+// The current kernel boots exactly one CPU and assigns it ID 0.
+int
+cpuid(void)
+{
+  return BOOT_CPU_ID;
+}
+
+// Callers keep dynamic interrupts masked while using CPU-local state.
+struct cpu *
+mycpu(void)
+{
+  return &cpus[BOOT_CPU_ID];
+}
+
 // Return the current struct proc *, or zero if none.
 struct proc *
 myproc(void)
@@ -765,3 +780,38 @@ either_copyin(void *dst, int user_src, uint64 src, uint64 len)
   memmove(dst, (void *)src, len);
   return 0;
 }
+
+// Print a process listing to console. For debugging.
+// Runs when user types ^P on console.
+// No lock to avoid wedging a stuck machine further.
+void
+procdump(void)
+{
+  static char *states[] = {
+    // clang-format off
+    [UNUSED] =   "unused",
+    [USED] =     "used",
+    [SLEEPING] = "sleep ",
+    [RUNNABLE] = "runble",
+    [RUNNING] =  "run   ",
+    [ZOMBIE] =   "zombie"
+    // clang-format on
+  };
+  struct proc *p;
+  char *state;
+
+  printk("\n");
+  for (p = proc; p < &proc[NPROC]; p++) {
+    if (p->state == UNUSED)
+      continue;
+    if (p->state >= 0 && p->state < NELEM(states) && states[p->state])
+      state = states[p->state];
+    else
+      state = "???";
+    printk("%d %s %s", p->pid, state, p->name);
+    printk("\n");
+  }
+}
+
+_Static_assert(NCPU == BOOT_CPU_COUNT,
+               "the kernel must provide exactly one CPU structure");

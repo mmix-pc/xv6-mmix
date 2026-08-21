@@ -21,9 +21,11 @@ OBJS = \
   $K/kalloc.o \
   $K/spinlock.o \
   $K/string.o \
+  $K/console.o \
+  $K/printk.o \
   $K/uart.o \
   $K/vm.o \
-  $K/early_print.o
+  $K/diagnostic.o
 
 CC = clang
 LD = ld.lld

@@ -1,6 +1,6 @@
 #include "mmix.h"
 #include "defs.h"
-#include "early_print.h"
+#include "diagnostic.h"
 #include "kalloc.h"
 #include "vm.h"
 
@@ -1009,5 +1009,5 @@ kvminithart(void)
     panic("paging enable");
 
   kernel_pagetable_live_audit();
-  mmix_early_print_paging(kernel_pagetable->rv);
+  mmix_diagnostic_paging(kernel_pagetable->rv);
 }
