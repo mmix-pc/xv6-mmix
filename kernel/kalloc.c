@@ -100,6 +100,59 @@ kalloc(void)
   return (void *)r;
 }
 
+// Allocate count physically contiguous pages. This is needed for MMIX rV
+// root blocks, which hardware addresses as one contiguous array.
+void *
+kalloc_contiguous(uint count)
+{
+  struct run *base;
+  uint64 managed_pages =
+    (KALLOC_LIMIT - KALLOC_START((uint64)kernel_end)) / PGSIZE;
+
+  if (count == 0 || count > managed_pages)
+    return 0;
+
+  acquire(&kmem.lock);
+  for (base = kmem.freelist; base != 0; base = base->next) {
+    uint64 address = (uint64)base;
+    uint found = 1;
+
+    if (address > KALLOC_LIMIT - (uint64)count * PGSIZE)
+      continue;
+    for (uint page = 1; page < count; page++) {
+      struct run *candidate;
+      uint64 wanted = address + (uint64)page * PGSIZE;
+
+      for (candidate = kmem.freelist; candidate != 0;
+           candidate = candidate->next)
+        if ((uint64)candidate == wanted)
+          break;
+      if (candidate == 0) {
+        found = 0;
+        break;
+      }
+    }
+    if (!found)
+      continue;
+
+    for (uint page = 0; page < count; page++) {
+      struct run **link = &kmem.freelist;
+      uint64 wanted = address + (uint64)page * PGSIZE;
+
+      while ((uint64)*link != wanted)
+        link = &(*link)->next;
+      *link = (*link)->next;
+    }
+    kmem.free_pages -= count;
+    release(&kmem.lock);
+
+    memset((void *)address, 5, (uint64)count * PGSIZE);
+    return (void *)address;
+  }
+  release(&kmem.lock);
+  return 0;
+}
+
 uint64
 kalloc_free_pages(void)
 {

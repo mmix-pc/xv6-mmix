@@ -2,6 +2,7 @@
 #define XV6_MMIX_KALLOC_H
 
 void *kalloc(void);
+void *kalloc_contiguous(uint count);
 void kfree(void *pa);
 void kinit(void);
 

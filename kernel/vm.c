@@ -45,14 +45,65 @@ table_address(uint64 pa)
 static int
 pagetable_valid(pagetable_t pagetable)
 {
-  return pagetable != 0 && pagetable->rv == MMIX_KERNEL_RV;
+  uint64 root_pa;
+  uint64 asn;
+
+  if (pagetable == 0)
+    return 0;
+  if (pagetable == kernel_pagetable)
+    return pagetable->rv == MMIX_KERNEL_RV;
+
+  root_pa = MMIX_RV_ROOT_PA(pagetable->rv);
+  asn = MMIX_RV_N(pagetable->rv);
+  return kalloc_page_is_managed(pagetable) &&
+         kalloc_page_is_managed((void *)root_pa) &&
+         kalloc_page_is_managed((void *)(root_pa + PGSIZE)) &&
+         asn >= MMIX_USER_ASN_FIRST && asn <= MMIX_USER_ASN_LAST &&
+         pagetable->rv == mmix_user_rv_make(root_pa, asn);
+}
+
+static int
+user_pagetable(pagetable_t pagetable)
+{
+  return pagetable_valid(pagetable) && pagetable != kernel_pagetable;
+}
+
+static void
+segment_bounds(uint64 rv, uint segment, uint *start, uint *end)
+{
+  uint boundary[5] = {0, MMIX_RV_B1(rv), MMIX_RV_B2(rv), MMIX_RV_B3(rv),
+                      MMIX_RV_B4(rv)};
+
+  *start = boundary[segment];
+  *end = boundary[segment + 1];
+  if (*end < *start)
+    *end = *start;
+}
+
+static int
+user_page_mappable(uint64 va)
+{
+  return (va >= MMIX_USER_IMAGE_BASE && va < MMIX_USER_HEAP_LIMIT) ||
+         (va >= MMIX_USER_STACK_BASE && va < MMIX_USER_STACK_TOP) ||
+         (va >= MMIX_USER_REGISTER_STACK_BASE &&
+          va < MMIX_USER_REGISTER_STACK_TOP);
+}
+
+static int
+user_range_mappable(uint64 first, uint64 last)
+{
+  return (first >= MMIX_USER_IMAGE_BASE && last < MMIX_USER_HEAP_LIMIT) ||
+         (first >= MMIX_USER_STACK_BASE && last < MMIX_USER_STACK_TOP) ||
+         (first >= MMIX_USER_REGISTER_STACK_BASE &&
+          last < MMIX_USER_REGISTER_STACK_TOP);
 }
 
 static int
 permissions_valid(uint64 permissions)
 {
-  if (permissions == 0 || (permissions & ~MMIX_PTE_PERM_VALUE_MASK) != 0 ||
-      (permissions & PTE_R) == 0)
+  if (permissions == 0 || (permissions & ~MMIX_PTE_PERM_VALUE_MASK) != 0)
+    return 0;
+  if ((permissions & PTE_W) != 0 && (permissions & PTE_R) == 0)
     return 0;
   return (permissions & (PTE_W | PTE_X)) != (PTE_W | PTE_X);
 }
@@ -75,7 +126,9 @@ leaf_valid(pagetable_t pagetable, pte_t pte)
   uint64 asn = MMIX_RV_N(pagetable->rv);
 
   return pte == mmix_pte_make(pa, asn, permissions) &&
-         permissions_valid(permissions);
+         permissions_valid(permissions) &&
+         (!user_pagetable(pagetable) ||
+          kalloc_page_is_managed((void *)pa));
 }
 
 static int
@@ -86,19 +139,36 @@ walk_leaf(pagetable_t pagetable, uint64 va, int alloc, pte_t **leaf)
   uint64 highest;
   uint64 table_pa;
   uint64 asn;
+  uint segment;
+  uint start;
+  uint end;
+  uint levels;
 
-  if (!pagetable_valid(pagetable) || mmix_va_segment(va) != 0 ||
-      va >= MMIX_SEGMENT0_LIMIT)
+  if (!pagetable_valid(pagetable))
+    return WALK_INVALID;
+
+  segment = mmix_va_segment(va);
+  if (segment >= 4)
+    return WALK_INVALID;
+  segment_bounds(pagetable->rv, segment, &start, &end);
+  levels = end - start;
+  if (levels == 0 || levels > MMIX_KERNEL_B1 ||
+      mmix_va_page(va) >= (1L << (levels * MMIX_PT_INDEX_BITS)))
+    return WALK_INVALID;
+  if (user_pagetable(pagetable) && !user_page_mappable(PGROUNDDOWN(va)))
     return WALK_INVALID;
 
   page = mmix_va_page(va);
-  for (uint level = 0; level < MMIX_KERNEL_B1; level++)
+  for (uint level = 0; level < levels; level++)
     digits[level] = (page >> (level * MMIX_PT_INDEX_BITS)) & MMIX_PT_INDEX_MASK;
 
   // The highest nonzero digit selects its contiguous root block. Lower
   // nonzero levels are reached through allocator-owned PTP blocks.
-  highest = digits[2] != 0 ? 2 : digits[1] != 0 ? 1 : 0;
-  table_pa = MMIX_RV_ROOT_PA(pagetable->rv) + highest * PGSIZE;
+  highest = 0;
+  for (uint level = 1; level < levels; level++)
+    if (digits[level] != 0)
+      highest = level;
+  table_pa = MMIX_RV_ROOT_PA(pagetable->rv) + (start + highest) * PGSIZE;
   asn = MMIX_RV_N(pagetable->rv);
 
   for (uint level = highest; level > 0; level--) {
@@ -183,8 +253,11 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 
   last_va = va + size - PGSIZE;
   last_pa = pa + size - PGSIZE;
-  if (!pagetable_valid(pagetable) || mmix_va_segment(va) != 0 ||
-      last_va >= MMIX_SEGMENT0_LIMIT || last_pa > MMIX_PTE_PA_FIELD_MASK)
+  if (!pagetable_valid(pagetable) ||
+      mmix_va_segment(va) != mmix_va_segment(last_va) ||
+      last_pa > MMIX_PTE_PA_FIELD_MASK ||
+      (user_pagetable(pagetable) &&
+       !user_range_mappable(va, last_va)))
     return -1;
 
   current_va = va;
@@ -216,8 +289,11 @@ mmix_unmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   size = npages * PGSIZE;
   if (va + size < va)
     return -1;
-  if (!pagetable_valid(pagetable) || mmix_va_segment(va) != 0 ||
-      (npages != 0 && va + size - PGSIZE >= MMIX_SEGMENT0_LIMIT))
+  if (!pagetable_valid(pagetable) ||
+      (npages != 0 &&
+       (mmix_va_segment(va) != mmix_va_segment(va + size - PGSIZE) ||
+        (user_pagetable(pagetable) &&
+         !user_range_mappable(va, va + size - PGSIZE)))))
     return -1;
 
   for (uint64 current = va; current < va + size; current += PGSIZE) {
@@ -289,12 +365,30 @@ static int
 mmix_pagetable_destroy(pagetable_t pagetable)
 {
   uint64 root_pa;
+  uint root_blocks;
 
   if (!pagetable_valid(pagetable))
     return -1;
   root_pa = MMIX_RV_ROOT_PA(pagetable->rv);
-  for (uint level = 0; level < MMIX_KERNEL_ROOT_BLOCKS; level++) {
-    if (free_table(pagetable, root_pa + level * PGSIZE, level) < 0) {
+  root_blocks = user_pagetable(pagetable) ? MMIX_USER_ROOT_BLOCKS
+                                         : MMIX_KERNEL_ROOT_BLOCKS;
+  for (uint root = 0; root < root_blocks; root++) {
+    uint level = 0;
+    int found = 0;
+
+    for (uint segment = 0; segment < 4; segment++) {
+      uint start;
+      uint end;
+
+      segment_bounds(pagetable->rv, segment, &start, &end);
+      if (root >= start && root < end) {
+        level = root - start;
+        found = 1;
+        break;
+      }
+    }
+    if (!found ||
+        free_table(pagetable, root_pa + root * PGSIZE, level) < 0) {
       mmix_pagetable_sync(pagetable);
       return -1;
     }
@@ -309,6 +403,326 @@ freewalk(pagetable_t pagetable)
 {
   if (mmix_pagetable_destroy(pagetable) < 0)
     panic("freewalk");
+}
+
+pagetable_t
+uvmcreate(uint asn)
+{
+  pagetable_t pagetable;
+  void *roots;
+
+  if (asn < MMIX_USER_ASN_FIRST || asn > MMIX_USER_ASN_LAST)
+    return 0;
+  pagetable = kalloc();
+  if (pagetable == 0)
+    return 0;
+  roots = kalloc_contiguous(MMIX_USER_ROOT_BLOCKS);
+  if (roots == 0) {
+    kfree(pagetable);
+    return 0;
+  }
+
+  memset(roots, 0, MMIX_USER_ROOT_BLOCKS * PGSIZE);
+  memset(pagetable, 0, PGSIZE);
+  pagetable->rv = mmix_user_rv_make((uint64)roots, asn);
+  if (!pagetable_valid(pagetable)) {
+    for (uint page = 0; page < MMIX_USER_ROOT_BLOCKS; page++)
+      kfree((char *)roots + page * PGSIZE);
+    kfree(pagetable);
+    return 0;
+  }
+  return pagetable;
+}
+
+uint64
+uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int permissions)
+{
+  uint64 first;
+  uint64 current;
+  uint64 mapped = 0;
+  uint64 leaf_permissions = (uint64)permissions | PTE_R;
+
+  if (!user_pagetable(pagetable) || newsz < oldsz ||
+      newsz > MMIX_USER_HEAP_LIMIT || !permissions_valid(leaf_permissions))
+    return 0;
+
+  first = PGROUNDUP(oldsz);
+  if (first < MMIX_USER_IMAGE_BASE)
+    first = MMIX_USER_IMAGE_BASE;
+  for (current = first; current < newsz; current += PGSIZE) {
+    void *page = kalloc();
+
+    if (page == 0)
+      goto fail;
+    memset(page, 0, PGSIZE);
+    if (mappages(pagetable, current, PGSIZE, (uint64)page,
+                 leaf_permissions) < 0) {
+      kfree(page);
+      goto fail;
+    }
+    mapped++;
+  }
+  return newsz;
+
+fail:
+  if (mapped != 0 && mmix_unmap(pagetable, first, mapped, 1) < 0)
+    panic("uvmalloc rollback");
+  return 0;
+}
+
+uint64
+uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
+{
+  uint64 first;
+  uint64 last;
+
+  if (!user_pagetable(pagetable) || oldsz > MMIX_USER_HEAP_LIMIT)
+    return oldsz;
+  if (newsz >= oldsz)
+    return oldsz;
+
+  first = PGROUNDUP(newsz);
+  if (first < MMIX_USER_IMAGE_BASE)
+    first = MMIX_USER_IMAGE_BASE;
+  last = PGROUNDUP(oldsz);
+  if (last > first && mmix_unmap(pagetable, first,
+                                  (last - first) / PGSIZE, 1) < 0)
+    panic("uvmdealloc");
+  return newsz;
+}
+
+static int
+uvmalloc_range(pagetable_t pagetable, uint64 start, uint64 end)
+{
+  uint64 current;
+
+  for (current = start; current < end; current += PGSIZE) {
+    void *page = kalloc();
+
+    if (page == 0)
+      break;
+    memset(page, 0, PGSIZE);
+    if (mappages(pagetable, current, PGSIZE, (uint64)page,
+                 PTE_R | PTE_W) < 0) {
+      kfree(page);
+      break;
+    }
+  }
+  if (current == end)
+    return 0;
+  if (current > start &&
+      mmix_unmap(pagetable, start, (current - start) / PGSIZE, 1) < 0)
+    panic("uvmalloc_range");
+  return -1;
+}
+
+int
+uvmallocstacks(pagetable_t pagetable)
+{
+  if (!user_pagetable(pagetable) ||
+      uvmalloc_range(pagetable, MMIX_USER_STACK_BASE,
+                     MMIX_USER_STACK_TOP) < 0)
+    return -1;
+  if (uvmalloc_range(pagetable, MMIX_USER_REGISTER_STACK_BASE,
+                     MMIX_USER_REGISTER_STACK_TOP) < 0) {
+    if (mmix_unmap(pagetable, MMIX_USER_STACK_BASE, MMIX_USER_STACK_PAGES,
+                   1) < 0)
+      panic("uvmallocstacks");
+    return -1;
+  }
+  return 0;
+}
+
+void
+uvmclear(pagetable_t pagetable, uint64 va)
+{
+  uint64 page = PGROUNDDOWN(va);
+  pte_t *leaf;
+
+  if (!user_pagetable(pagetable) ||
+      walk_leaf(pagetable, page, 0, &leaf) != WALK_OK ||
+      !leaf_valid(pagetable, *leaf) ||
+      mmix_unmap(pagetable, page, 1, 1) < 0)
+    panic("uvmclear");
+}
+
+static int
+uvmcopy_range(pagetable_t old, pagetable_t new, uint64 start, uint64 end)
+{
+  for (uint64 va = start; va < end; va += PGSIZE) {
+    pte_t *leaf;
+    void *page;
+    int status = walk_leaf(old, va, 0, &leaf);
+
+    if (status == WALK_ABSENT || (status == WALK_OK && *leaf == 0))
+      continue;
+    if (status != WALK_OK || !leaf_valid(old, *leaf))
+      return -1;
+    page = kalloc();
+    if (page == 0)
+      return -1;
+    memmove((void *)mmix_phys_alias((uint64)page),
+            (void *)mmix_phys_alias(mmix_pte_pa(*leaf)), PGSIZE);
+    if (mappages(new, va, PGSIZE, (uint64)page,
+                 mmix_pte_permissions(*leaf)) < 0) {
+      kfree(page);
+      return -1;
+    }
+  }
+  return 0;
+}
+
+static void
+uvmremove_range(pagetable_t pagetable, uint64 start, uint64 end)
+{
+  if (end > start &&
+      mmix_unmap(pagetable, start, (end - start) / PGSIZE, 1) < 0)
+    panic("uvmremove_range");
+}
+
+static int
+uvmrange_empty(pagetable_t pagetable, uint64 start, uint64 end)
+{
+  for (uint64 va = start; va < end; va += PGSIZE) {
+    pte_t *leaf;
+    int status = walk_leaf(pagetable, va, 0, &leaf);
+
+    if (status != WALK_ABSENT && (status != WALK_OK || *leaf != 0))
+      return 0;
+  }
+  return 1;
+}
+
+int
+uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  uint64 image_end;
+
+  if (!user_pagetable(old) || !user_pagetable(new) || old == new ||
+      sz > MMIX_USER_HEAP_LIMIT)
+    return -1;
+  image_end = PGROUNDUP(sz);
+  if (image_end < MMIX_USER_IMAGE_BASE)
+    image_end = MMIX_USER_IMAGE_BASE;
+  if (!uvmrange_empty(new, MMIX_USER_IMAGE_BASE, image_end) ||
+      !uvmrange_empty(new, MMIX_USER_STACK_BASE, MMIX_USER_STACK_TOP) ||
+      !uvmrange_empty(new, MMIX_USER_REGISTER_STACK_BASE,
+                      MMIX_USER_REGISTER_STACK_TOP))
+    return -1;
+
+  if (uvmcopy_range(old, new, MMIX_USER_IMAGE_BASE, image_end) == 0 &&
+      uvmcopy_range(old, new, MMIX_USER_STACK_BASE,
+                    MMIX_USER_STACK_TOP) == 0 &&
+      uvmcopy_range(old, new, MMIX_USER_REGISTER_STACK_BASE,
+                    MMIX_USER_REGISTER_STACK_TOP) == 0)
+    return 0;
+
+  uvmremove_range(new, MMIX_USER_IMAGE_BASE, image_end);
+  uvmremove_range(new, MMIX_USER_STACK_BASE, MMIX_USER_STACK_TOP);
+  uvmremove_range(new, MMIX_USER_REGISTER_STACK_BASE,
+                  MMIX_USER_REGISTER_STACK_TOP);
+  return -1;
+}
+
+void
+uvmfree(pagetable_t pagetable, uint64 sz)
+{
+  uint64 root_pa;
+  uint64 image_end;
+
+  if (!user_pagetable(pagetable) || sz > MMIX_USER_HEAP_LIMIT ||
+      mmix_rv_read() == pagetable->rv)
+    panic("uvmfree");
+  root_pa = MMIX_RV_ROOT_PA(pagetable->rv);
+  image_end = PGROUNDUP(sz);
+  if (image_end < MMIX_USER_IMAGE_BASE)
+    image_end = MMIX_USER_IMAGE_BASE;
+
+  uvmremove_range(pagetable, MMIX_USER_IMAGE_BASE, image_end);
+  uvmremove_range(pagetable, MMIX_USER_STACK_BASE, MMIX_USER_STACK_TOP);
+  uvmremove_range(pagetable, MMIX_USER_REGISTER_STACK_BASE,
+                  MMIX_USER_REGISTER_STACK_TOP);
+  if (mmix_pagetable_destroy(pagetable) < 0)
+    panic("uvmfree tables");
+  for (uint page = 0; page < MMIX_USER_ROOT_BLOCKS; page++)
+    kfree((void *)(root_pa + page * PGSIZE));
+  kfree(pagetable);
+}
+
+int
+copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
+{
+  if (len != 0 && dstva > ~(uint64)0 - (len - 1))
+    return -1;
+  while (len != 0) {
+    uint64 pa;
+    uint64 count;
+
+    if (mmix_pagetable_translate(pagetable, dstva, PTE_W, &pa) < 0)
+      return -1;
+    count = PGSIZE - (dstva & (PGSIZE - 1));
+    if (count > len)
+      count = len;
+    memmove((void *)mmix_phys_alias(pa), src, count);
+    if (dstva + count < dstva)
+      return -1;
+    dstva += count;
+    src += count;
+    len -= count;
+  }
+  return 0;
+}
+
+int
+copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
+{
+  if (len != 0 && srcva > ~(uint64)0 - (len - 1))
+    return -1;
+  while (len != 0) {
+    uint64 pa;
+    uint64 count;
+
+    if (mmix_pagetable_translate(pagetable, srcva, PTE_R, &pa) < 0)
+      return -1;
+    count = PGSIZE - (srcva & (PGSIZE - 1));
+    if (count > len)
+      count = len;
+    memmove(dst, (void *)mmix_phys_alias(pa), count);
+    if (srcva + count < srcva)
+      return -1;
+    srcva += count;
+    dst += count;
+    len -= count;
+  }
+  return 0;
+}
+
+int
+copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
+{
+  if (max != 0 && srcva > ~(uint64)0 - (max - 1))
+    return -1;
+  while (max != 0) {
+    uint64 pa;
+    uint64 count;
+
+    if (mmix_pagetable_translate(pagetable, srcva, PTE_R, &pa) < 0)
+      return -1;
+    count = PGSIZE - (srcva & (PGSIZE - 1));
+    if (count > max)
+      count = max;
+    while (count != 0) {
+      char c = *(char *)mmix_phys_alias(pa++);
+
+      *dst++ = c;
+      max--;
+      count--;
+      srcva++;
+      if (c == 0)
+        return 0;
+    }
+  }
+  return -1;
 }
 
 static pte_t

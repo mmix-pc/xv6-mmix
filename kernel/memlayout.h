@@ -130,6 +130,26 @@
 #define MMIX_PROCESS_REGISTER_STACK_LIMIT(index)                               \
   MMIX_CONTEXT_REGISTER_STACK_LIMIT(MMIX_PROCESS_CONTEXT_SLOT(index))
 
+// Per-process user virtual layout. Page zero contains the fixed MMIX TRIP
+// vectors and remains unmapped. The software and register stacks have
+// unmapped guards on both sides and never share kernel context pages.
+#define MMIX_USER_LOW_GUARD_BASE      0x0000000000000000
+#define MMIX_USER_IMAGE_BASE          0x0000000000002000
+#define MMIX_USER_HEAP_LIMIT          0x00000000007f6000
+#define MMIX_USER_STACK_GUARD_BASE    0x00000000007f6000
+#define MMIX_USER_STACK_BASE          0x00000000007f8000
+#define MMIX_USER_STACK_TOP           0x0000000000800000
+#define MMIX_USER_REGISTER_GUARD_BASE 0x600000000000e000
+#define MMIX_USER_REGISTER_STACK_BASE 0x6000000000010000
+#define MMIX_USER_REGISTER_STACK_TOP  0x6000000000030000
+#define MMIX_USER_REGISTER_GUARD_TOP  0x6000000000032000
+
+#define MMIX_USER_STACK_PAGES                                             \
+  ((MMIX_USER_STACK_TOP - MMIX_USER_STACK_BASE) / MMIX_PAGE_SIZE)
+#define MMIX_USER_REGISTER_STACK_PAGES                                    \
+  ((MMIX_USER_REGISTER_STACK_TOP - MMIX_USER_REGISTER_STACK_BASE) /       \
+   MMIX_PAGE_SIZE)
+
 // FIXME: kernel.ld provides a page-aligned kernel_end. Keep this macro as an
 // identity operation for now: the MMIX code generator otherwise folds the
 // usual round-up addition into an unaligned GETA symbol addend that the linker
@@ -211,6 +231,19 @@ _Static_assert(MMIX_CONTEXT_HIGH_GUARD(MMIX_CONTEXT_SCHEDULER_SLOT) ==
 _Static_assert(KSTACK(0) == 0x000007fffffee000 &&
                  KSTACK(63) == 0x000007ffffd78000,
                "process kernel-stack endpoints must match the scheduler ABI");
+_Static_assert(MMIX_USER_IMAGE_BASE == MMIX_PAGE_SIZE &&
+                 MMIX_USER_HEAP_LIMIT == MMIX_USER_STACK_GUARD_BASE &&
+                 MMIX_USER_STACK_BASE ==
+                   MMIX_USER_STACK_GUARD_BASE + MMIX_PAGE_SIZE &&
+                 MMIX_USER_STACK_PAGES == 4,
+               "user segment-0 layout must match the user ABI");
+_Static_assert((MMIX_USER_REGISTER_STACK_BASE >> 61) == 3 &&
+                 MMIX_USER_REGISTER_STACK_BASE ==
+                   MMIX_USER_REGISTER_GUARD_BASE + MMIX_PAGE_SIZE &&
+                 MMIX_USER_REGISTER_STACK_PAGES == 16 &&
+                 MMIX_USER_REGISTER_GUARD_TOP ==
+                   MMIX_USER_REGISTER_STACK_TOP + MMIX_PAGE_SIZE,
+               "user register-stack layout must match the user ABI");
 _Static_assert(KALLOC_LIMIT <= LOW_RAM_END,
                "allocator limit must remain inside Low RAM");
 _Static_assert(KALLOC_START(KERNEL_LOAD) < KALLOC_LIMIT,

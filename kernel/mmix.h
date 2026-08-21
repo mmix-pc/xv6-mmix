@@ -79,6 +79,20 @@
 #define MMIX_KERNEL_ROOT_BLOCKS (MMIX_KERNEL_B1 - MMIX_KERNEL_B0)
 #define MMIX_SEGMENT0_LIMIT     0x0000080000000000
 
+// User translation configuration. Segments 0 and 3 each have one radix-1024
+// digit; segments 1 and 2 are empty. The two root blocks are contiguous.
+#define MMIX_USER_B0 0
+#define MMIX_USER_B1 1
+#define MMIX_USER_B2 1
+#define MMIX_USER_B3 1
+#define MMIX_USER_B4 2
+#define MMIX_USER_S  PGSHIFT
+#define MMIX_USER_F  MMIX_RV_F_HARDWARE
+#define MMIX_USER_ROOT_BLOCKS (MMIX_USER_B4 - MMIX_USER_B0)
+#define MMIX_USER_ASN_FIRST   1
+#define MMIX_USER_ASN_LAST    64
+#define MMIX_USER_RV_BASE     0x11120d0000000000
+
 // Kernel trap requests and masks. Program requests occupy rQ[39:32]; the
 // QEMU virt interrupt controller drives I/O request bit 8.
 #define MMIX_RQ_PROGRAM_SHIFT 32
@@ -241,6 +255,14 @@ mmix_rv_make(uint64 root_pa, uint64 asn)
   return MMIX_RV_BUILD(MMIX_KERNEL_B1, MMIX_KERNEL_B2, MMIX_KERNEL_B3,
                        MMIX_KERNEL_B4, MMIX_KERNEL_S, root_pa >> PGSHIFT, asn,
                        MMIX_KERNEL_F);
+}
+
+static inline uint64
+mmix_user_rv_make(uint64 root_pa, uint64 asn)
+{
+  return MMIX_RV_BUILD(MMIX_USER_B1, MMIX_USER_B2, MMIX_USER_B3,
+                       MMIX_USER_B4, MMIX_USER_S, root_pa >> PGSHIFT, asn,
+                       MMIX_USER_F);
 }
 
 static inline uint64
@@ -620,6 +642,15 @@ _Static_assert(KERNEL_ROOT_BLOCKS == MMIX_KERNEL_ROOT_BLOCKS,
 _Static_assert(MMIX_SEGMENT0_LIMIT ==
                  (1L << (PGSHIFT + MMIX_PT_INDEX_BITS * MMIX_KERNEL_B1)),
                "segment-0 limit must match the configured table span");
+_Static_assert(MMIX_USER_RV_BASE ==
+                 MMIX_RV_BUILD(MMIX_USER_B1, MMIX_USER_B2, MMIX_USER_B3,
+                               MMIX_USER_B4, MMIX_USER_S, 0, 0, MMIX_USER_F),
+               "user rV base must match its named fields");
+_Static_assert(MMIX_USER_ROOT_BLOCKS == 2,
+               "user rV must use two contiguous root blocks");
+_Static_assert(MMIX_USER_ASN_FIRST > MMIX_KERNEL_N &&
+                 MMIX_USER_ASN_LAST <= MMIX_RV_N_VALUE_MASK,
+               "user address-space numbers must be valid and non-kernel");
 
 #endif // !__ASSEMBLER__
 
