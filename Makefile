@@ -24,6 +24,7 @@ OBJS = \
   $K/console.o \
   $K/printk.o \
   $K/uart.o \
+  $K/virtio_disk.o \
   $K/vm.o \
   $K/diagnostic.o
 
@@ -66,8 +67,11 @@ QEMUOPTS += -smp 1
 QEMUOPTS += -display none
 QEMUOPTS += -serial stdio
 QEMUOPTS += -monitor none
+QEMUOPTS += -global virtio-mmio.force-legacy=false
+QEMUOPTS += -drive file=fs.img,if=none,format=raw,id=x0
+QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
-qemu: $K/kernel
+qemu: $K/kernel fs.img
 	$(QEMU) $(QEMUOPTS) -kernel $K/kernel
 
 tags: $(OBJS)

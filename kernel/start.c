@@ -19,6 +19,7 @@ void scheduler(void) __attribute__((noreturn));
 void swtch(struct context *, struct context *);
 void consoleinit(void);
 void uartenable(void);
+void virtio_disk_init(void);
 
 struct mmix_boot_state mmix_boot;
 
@@ -50,6 +51,7 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
     panic("intc init");
   consoleinit();
   printkinit();
+  virtio_disk_init();
   if (mmix_timer_init() != MMIX_TIMER_OK)
     panic("timer init");
   if (mmix_boot.bootinfo_status != bootinfo_status)
