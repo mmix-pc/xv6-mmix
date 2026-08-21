@@ -1,149 +1,181 @@
-        #
-        # low-level code to handle traps from user space into
-        # the kernel, and returns from kernel to user.
-        #
-        # the kernel maps the page holding this code
-        # at the same virtual address (TRAMPOLINE)
-        # in user and kernel space so that it continues
-        # to work when it switches page tables.
-        # kernel.ld causes this code to start at 
-        # a page boundary.
-        #
+#include "proc.h"
 
-#include "riscv.h"
-#include "memlayout.h"
+.section .text
 
-.section trampsec
-.globl trampoline
-.globl usertrap
-trampoline:
-.align 4
-.globl uservec
-uservec:    
-	#
-        # trap.c sets stvec to point here, so
-        # traps from user space start here,
-        # in supervisor mode, but with a
-        # user page table.
-        #
+// Entered through the negative rT/rTT alias with the user translation and
+// both user stacks still active. This path saves the complete user
+// continuation before installing the kernel translation or continuation.
+.p2align 4
+.global mmix_user_trap_entry
+.type mmix_user_trap_entry,@function
+mmix_user_trap_entry:
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        BZ r255,.Luser_emergency
+        LDOU r255,r255,MMIX_PROC_TRAPFRAME_FLAGS_OFFSET
+        CMPU r255,r255,MMIX_PROC_TRAPFRAME_ACTIVE
+        BNZ r255,.Luser_emergency
 
-        # save user a0 in sscratch so
-        # a0 can be used to get at TRAPFRAME.
-        csrw sscratch, a0
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        STCO MMIX_PROC_TRAPFRAME_ENTERING,r255,MMIX_PROC_TRAPFRAME_FLAGS_OFFSET
 
-        # each process has a separate p->trapframe memory area,
-        # but it's mapped to the same virtual address
-        # (TRAPFRAME) in every process's user page table.
-        li a0, TRAPFRAME
-        
-        # save the user registers in TRAPFRAME
-        sd ra, 40(a0)
-        sd sp, 48(a0)
-        sd gp, 56(a0)
-        sd tp, 64(a0)
-        sd t0, 72(a0)
-        sd t1, 80(a0)
-        sd t2, 88(a0)
-        sd s0, 96(a0)
-        sd s1, 104(a0)
-        sd a1, 120(a0)
-        sd a2, 128(a0)
-        sd a3, 136(a0)
-        sd a4, 144(a0)
-        sd a5, 152(a0)
-        sd a6, 160(a0)
-        sd a7, 168(a0)
-        sd s2, 176(a0)
-        sd s3, 184(a0)
-        sd s4, 192(a0)
-        sd s5, 200(a0)
-        sd s6, 208(a0)
-        sd s7, 216(a0)
-        sd s8, 224(a0)
-        sd s9, 232(a0)
-        sd s10, 240(a0)
-        sd s11, 248(a0)
-        sd t3, 256(a0)
-        sd t4, 264(a0)
-        sd t5, 272(a0)
-        sd t6, 280(a0)
+        // SAVE must precede C, scheduling, kernel UNSAVE, and the rV switch.
+        // Hardware already copied the interrupted user $255 to rBB.
+        SAVE r255
+        GETA r0,mmix_user_trapframe
+        LDOU r0,r0,0
+        STOU r255,r0,MMIX_PROC_TRAPFRAME_USER_STATE_OFFSET
 
-	# save the user a0 in p->trapframe->a0
-        csrr t0, sscratch
-        sd t0, 112(a0)
+        GET r1,rV
+        LDOU r2,r0,MMIX_PROC_TRAPFRAME_USER_RV_OFFSET
+        CMPU r1,r1,r2
+        BNZ r1,.Luser_emergency
+        LDOU r1,r0,MMIX_PROC_TRAPFRAME_KERNEL_STATE_OFFSET
+        BZ r1,.Luser_emergency
+        LDOU r1,r0,MMIX_PROC_TRAPFRAME_RESERVED_OFFSET
+        BNZ r1,.Luser_emergency
 
-        # initialize kernel stack pointer, from p->trapframe->kernel_sp
-        ld sp, 8(a0)
+        GET r1,rC
+        STOU r1,r0,MMIX_PROC_TRAPFRAME_USER_RC_OFFSET
+        GET r1,rI
+        STOU r1,r0,MMIX_PROC_TRAPFRAME_USER_RI_OFFSET
+        GET r1,rU
+        STOU r1,r0,MMIX_PROC_TRAPFRAME_USER_RU_OFFSET
+        GET r1,rF
+        STOU r1,r0,MMIX_PROC_TRAPFRAME_USER_RF_OFFSET
+        GET r1,rBB
+        STOU r1,r0,MMIX_PROC_TRAPFRAME_RBB_OFFSET
+        GET r1,rWW
+        STOU r1,r0,MMIX_PROC_TRAPFRAME_RWW_OFFSET
+        GET r1,rXX
+        STOU r1,r0,MMIX_PROC_TRAPFRAME_RXX_OFFSET
+        GET r1,rYY
+        STOU r1,r0,MMIX_PROC_TRAPFRAME_RYY_OFFSET
+        GET r1,rZZ
+        STOU r1,r0,MMIX_PROC_TRAPFRAME_RZZ_OFFSET
+        GET r1,rQ
+        STOU r1,r0,MMIX_PROC_TRAPFRAME_RQ_OFFSET
 
-        # make tp hold the current hartid, from p->trapframe->kernel_hartid
-        ld tp, 32(a0)
+        SETH r1,((MMIX_KERNEL_RV >> 48) & 0xffff)
+        ORMH r1,((MMIX_KERNEL_RV >> 32) & 0xffff)
+        ORML r1,((MMIX_KERNEL_RV >> 16) & 0xffff)
+        ORL r1,(MMIX_KERNEL_RV & 0xffff)
+        SYNC 3
+        SYNC 6
+        PUT rV,r1
+        LDOU r255,r0,MMIX_PROC_TRAPFRAME_KERNEL_STATE_OFFSET
+        UNSAVE r255
 
-        # load the address of usertrap(), from p->trapframe->kernel_trap
-        ld t0, 16(a0)
+        // The kernel continuation is live again. Retire the destructively
+        // consumed state and unpublish user ownership before returning to C.
+        GETA r0,mmix_user_trapframe
+        LDOU r0,r0,0
+        STCO 0,r0,MMIX_PROC_TRAPFRAME_KERNEL_STATE_OFFSET
+        STCO MMIX_PROC_TRAPFRAME_READY,r0,MMIX_PROC_TRAPFRAME_FLAGS_OFFSET
+        GETA r0,mmix_user_trapframe
+        STCO 0,r0,0
+        POP 0,0
+.size mmix_user_trap_entry,.-mmix_user_trap_entry
 
-        # fetch the kernel page table address, from p->trapframe->kernel_satp.
-        ld t1, 0(a0)
+// Save the current kernel continuation, enter the negative restore stub, and
+// return here only after the next user trap has saved the user continuation.
+.p2align 4
+.global mmix_user_resume
+.type mmix_user_resume,@function
+mmix_user_resume:
+        SAVE r255
+        GETA r0,mmix_user_trapframe
+        LDOU r0,r0,0
+        BZ r0,.Luser_emergency
+        STOU r255,r0,MMIX_PROC_TRAPFRAME_KERNEL_STATE_OFFSET
 
-        # wait for any previous memory operations to complete, so that
-        # they use the user page table.
-        sfence.vma zero, zero
+        GET r1,rV
+        SETH r2,((MMIX_KERNEL_RV >> 48) & 0xffff)
+        ORMH r2,((MMIX_KERNEL_RV >> 32) & 0xffff)
+        ORML r2,((MMIX_KERNEL_RV >> 16) & 0xffff)
+        ORL r2,(MMIX_KERNEL_RV & 0xffff)
+        CMPU r1,r1,r2
+        BNZ r1,.Luser_emergency
 
-        # install the kernel page table.
-        csrw satp, t1
+        GETA r1,.Luser_restore
+        SETH r2,0x8000
+        OR r1,r1,r2
+        GO r0,r1,0
 
-        # flush now-stale user entries from the TLB.
-        sfence.vma zero, zero
+.Luser_restore:
+        GETA r0,mmix_user_trapframe
+        LDOU r0,r0,0
+        BZ r0,.Luser_emergency
+        LDOU r1,r0,MMIX_PROC_TRAPFRAME_FLAGS_OFFSET
+        CMPU r1,r1,MMIX_PROC_TRAPFRAME_ACTIVE
+        BNZ r1,.Luser_emergency
+        LDOU r1,r0,MMIX_PROC_TRAPFRAME_RESERVED_OFFSET
+        BNZ r1,.Luser_emergency
 
-        # call usertrap()
-        jalr t0
+        LDOU r255,r0,MMIX_PROC_TRAPFRAME_USER_STATE_OFFSET
+        LDOU r1,r0,MMIX_PROC_TRAPFRAME_USER_RV_OFFSET
+        SYNC 3
+        SYNC 6
+        PUT rV,r1
+        UNSAVE r255
 
-.globl userret
-userret:
-        # usertrap() returns here, with user satp in a0.
-        # return from kernel to user.
+        // Only $255 is scratch after UNSAVE; RESUME restores the interrupted
+        // user value from rBB. Reload the negative trapframe alias each time.
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        LDOU r255,r255,MMIX_PROC_TRAPFRAME_RBB_OFFSET
+        PUT rBB,r255
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        LDOU r255,r255,MMIX_PROC_TRAPFRAME_RWW_OFFSET
+        PUT rWW,r255
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        LDOU r255,r255,MMIX_PROC_TRAPFRAME_RXX_OFFSET
+        PUT rXX,r255
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        LDOU r255,r255,MMIX_PROC_TRAPFRAME_RYY_OFFSET
+        PUT rYY,r255
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        LDOU r255,r255,MMIX_PROC_TRAPFRAME_RZZ_OFFSET
+        PUT rZZ,r255
 
-        # switch to the user page table.
-        sfence.vma zero, zero
-        csrw satp, a0
-        sfence.vma zero, zero
+        // Complete the architectural GET/PUT request handoff using the value
+        // selected by C rather than restoring a stale hardware snapshot.
+        GET r255,rQ
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        LDOU r255,r255,MMIX_PROC_TRAPFRAME_RQ_OFFSET
+        PUT rQ,r255
 
-        li a0, TRAPFRAME
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        LDOU r255,r255,MMIX_PROC_TRAPFRAME_USER_RF_OFFSET
+        PUT rF,r255
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        LDOU r255,r255,MMIX_PROC_TRAPFRAME_USER_RU_OFFSET
+        PUT rU,r255
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        LDOU r255,r255,MMIX_PROC_TRAPFRAME_USER_RI_OFFSET
+        PUT rI,r255
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        LDOU r255,r255,MMIX_PROC_TRAPFRAME_USER_RC_OFFSET
+        PUT rC,r255
 
-        # restore all but a0 from TRAPFRAME
-        ld ra, 40(a0)
-        ld sp, 48(a0)
-        ld gp, 56(a0)
-        ld tp, 64(a0)
-        ld t0, 72(a0)
-        ld t1, 80(a0)
-        ld t2, 88(a0)
-        ld s0, 96(a0)
-        ld s1, 104(a0)
-        ld a1, 120(a0)
-        ld a2, 128(a0)
-        ld a3, 136(a0)
-        ld a4, 144(a0)
-        ld a5, 152(a0)
-        ld a6, 160(a0)
-        ld a7, 168(a0)
-        ld s2, 176(a0)
-        ld s3, 184(a0)
-        ld s4, 192(a0)
-        ld s5, 200(a0)
-        ld s6, 208(a0)
-        ld s7, 216(a0)
-        ld s8, 224(a0)
-        ld s9, 232(a0)
-        ld s10, 240(a0)
-        ld s11, 248(a0)
-        ld t3, 256(a0)
-        ld t4, 264(a0)
-        ld t5, 272(a0)
-        ld t6, 280(a0)
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        LDOU r255,r255,MMIX_PROC_TRAPFRAME_USER_RK_OFFSET
+        RESUME 1
 
-	# restore user a0
-        ld a0, 112(a0)
-        
-        # return to user mode and user pc.
-        # prepare_return() sets up sstatus and sepc.
-        sret
+.Luser_emergency:
+        PUT rK,0
+.Luser_wait:
+        SWYM 0,0,0
+        JMPB .Luser_wait
+.size mmix_user_resume,.-mmix_user_resume

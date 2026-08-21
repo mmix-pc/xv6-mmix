@@ -3,6 +3,7 @@
 #include "cpu.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "kalloc.h"
 #include "early_print.h"
 #include "intc.h"
 #include "timer.h"
@@ -10,9 +11,11 @@
 
 extern char kernel_text_end[];
 extern char mmix_kernel_trap_entry[];
+extern void mmix_user_resume(void);
 
 volatile uint64 mmix_trap_active;
 uint64 mmix_trap_vector;
+volatile uint64 mmix_user_trapframe;
 
 static void
 trap_report(enum mmix_trap_class event, const char *cause,
@@ -188,6 +191,63 @@ trapinithart(void)
   requests = mmix_rq_read();
   mmix_rq_write(requests & ~MMIX_RQ_PROGRAM_MASK);
   mmix_intr_mask_write(MMIX_KERNEL_PROGRAM_MASK);
+}
+
+// Switch from the current process's kernel continuation to its saved user
+// continuation. This call returns only after the next user trap has made the
+// user state process-owned again.
+void
+usertrapret(void)
+{
+  struct cpu *c = mycpu();
+  struct proc *p = c->proc;
+  struct trapframe *trapframe;
+  uint64 alias;
+
+  mmix_intr_mask_write(0);
+  if (p == 0 || p->state != RUNNING || holding(&p->lock) || c->noff != 0 ||
+      mmix_user_trapframe != 0 || mmix_trap_active != 0)
+    panic("user return owner");
+  trapframe = p->trapframe;
+  if (trapframe == 0 || !kalloc_page_is_managed(trapframe) ||
+      ((uint64)trapframe & (PGSIZE - 1)) != 0 || p->pagetable == 0 ||
+      trapframe->user_rv != p->pagetable->rv ||
+      trapframe->user_rk != MMIX_PROC_USER_RK ||
+      trapframe->kernel_state != 0 ||
+      trapframe->flags != MMIX_PROC_TRAPFRAME_READY ||
+      trapframe->reserved != 0 ||
+      (trapframe->user_state & (sizeof(uint64) - 1)) != 0 ||
+      trapframe->user_state < MMIX_USER_REGISTER_STACK_BASE ||
+      trapframe->user_state >= MMIX_USER_REGISTER_STACK_TOP)
+    panic("user return state");
+
+  if (mmix_rv_read() != MMIX_KERNEL_RV ||
+      mmix_sp_read() <= p->kstack || mmix_sp_read() > p->kstack + PGSIZE ||
+      mmix_ro_read() < p->kstack + 2 * PGSIZE ||
+      mmix_ro_read() >= p->kstack + 3 * PGSIZE ||
+      mmix_rs_read() < p->kstack + 2 * PGSIZE ||
+      mmix_rs_read() >= p->kstack + 3 * PGSIZE)
+    panic("user return stack");
+
+  alias = mmix_phys_alias((uint64)trapframe);
+  trapframe->flags = MMIX_PROC_TRAPFRAME_ACTIVE;
+  asm volatile("" : : : "memory");
+  mmix_user_trapframe = alias;
+  asm volatile("" : : : "memory");
+  mmix_user_resume();
+  asm volatile("" : : : "memory");
+
+  if (c->proc != p || p->trapframe != trapframe ||
+      mmix_user_trapframe != 0 || mmix_trap_active != 0 ||
+      trapframe->kernel_state != 0 ||
+      trapframe->flags != MMIX_PROC_TRAPFRAME_READY ||
+      trapframe->reserved != 0 ||
+      (trapframe->user_state & (sizeof(uint64) - 1)) != 0 ||
+      trapframe->user_state < MMIX_USER_REGISTER_STACK_BASE ||
+      trapframe->user_state >= MMIX_USER_REGISTER_STACK_TOP ||
+      (trapframe->rww & MMIX_PHYSICAL_ALIAS_BIT) != 0 ||
+      mmix_rv_read() != MMIX_KERNEL_RV || mmix_rk_read() != 0)
+    panic("user trap state");
 }
 
 void

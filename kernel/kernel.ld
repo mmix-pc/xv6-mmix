@@ -57,6 +57,13 @@ SECTIONS
              mmix_kernel_trap_entry >= 0x00100000 &&
              mmix_kernel_trap_entry < kernel_text_end,
          "MMIX kernel trap entry is misplaced")
+  ASSERT((mmix_user_trap_entry & 0xf) == 0 &&
+             mmix_user_trap_entry >= 0x00100000 &&
+             mmix_user_trap_entry < kernel_text_end &&
+             (mmix_user_resume & 0xf) == 0 &&
+             mmix_user_resume >= 0x00100000 &&
+             mmix_user_resume < kernel_text_end,
+         "MMIX user transition code is misplaced")
   ASSERT((0x00100000 & 0xf) == 0 &&
              kernel_text_end < 0x8000000000000000,
          "kernel text cannot provide a negative MMIX trap alias")
@@ -73,7 +80,9 @@ SECTIONS
              mmix_trap_rk_shadow >= kernel_rodata_end &&
              mmix_trap_rk_shadow + 8 <= kernel_end &&
              mmix_trap_vector >= kernel_rodata_end &&
-             mmix_trap_vector + 8 <= kernel_end,
+             mmix_trap_vector + 8 <= kernel_end &&
+             mmix_user_trapframe >= kernel_rodata_end &&
+             mmix_user_trapframe + 8 <= kernel_end,
          "MMIX trap state is outside kernel writable storage")
   ASSERT(kernel_end <= 0x05ffe000,
          "kernel overlaps the bootstrap stack")

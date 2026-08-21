@@ -26,6 +26,12 @@
 
 #define MMIX_PROC_USER_RK (MMIX_RQ_PROGRAM_MASK | MMIX_RQ_INTC)
 
+// The CPU scratch pointer is published only while a process owns the live
+// user continuation. ENTERING closes recursive reuse before SAVE completes.
+#define MMIX_PROC_TRAPFRAME_READY    0
+#define MMIX_PROC_TRAPFRAME_ACTIVE   1
+#define MMIX_PROC_TRAPFRAME_ENTERING 2
+
 #if !defined(__ASSEMBLER__)
 
 #include "cpu.h"

@@ -4,6 +4,7 @@ U=user
 OBJS = \
   $K/entry.o \
   $K/kernelvec.o \
+  $K/trampoline.o \
   $K/specialreg.o \
   $K/start.o \
   $K/trap.o \

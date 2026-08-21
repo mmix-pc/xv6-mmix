@@ -1,12 +1,21 @@
 #include "mmix.h"
+#include "proc.h"
 
 .section .text
 .p2align 4
 .global mmix_kernel_trap_entry
 .type mmix_kernel_trap_entry,@function
 mmix_kernel_trap_entry:
-        // Hardware supplies the interrupted rJ in $255. Preserve it and the
-        // register-stack boundary before touching either kernel stack.
+        // A published process trapframe selects the user continuation path.
+        // $255 is scratch because hardware has already preserved its user or
+        // kernel value in rBB; rJ itself remains readable until the push.
+        GETA r255,mmix_user_trapframe
+        LDOU r255,r255,0
+        BNZ r255,mmix_user_trap_entry
+
+        // Preserve the interrupted rJ and register-stack boundary before
+        // touching either kernel stack.
+        GET r255,rJ
         PUT rW,r255
         GET r255,rG
         PUT rX,r255
