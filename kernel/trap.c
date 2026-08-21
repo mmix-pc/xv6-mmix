@@ -136,6 +136,12 @@ trap_device_service(uint64 rq, uint64 restore_rk, uint64 rxx, uint32 *claim,
       return "controller complete";
     return 0;
   }
+  if (*claim == VIRTIO0_IRQ) {
+    virtio_disk_intr();
+    if (mmix_intc_complete(*claim) != MMIX_INTC_OK)
+      return "controller complete";
+    return 0;
+  }
   if (*claim != MMIX_TIMER_IRQ)
     return "unexpected claim";
   if (mmix_timer_pending(&pending) != MMIX_TIMER_OK || !pending)
@@ -483,6 +489,7 @@ mmix_kernel_trap(enum mmix_trap_class event, struct mmix_trap_state *state)
     if (state->rxx ==
         (MMIX_DYNAMIC_TRAP_RESUME_NEXT | MMIX_KERNEL_FORCED_TRAP_INSN)) {
       trap_report(event, "expected", state, 0);
+      mmix_trap_rk_shadow = state->restore_rk;
       return;
     }
     trap_stop(event, "unexpected instruction", state, 0);
@@ -502,6 +509,9 @@ mmix_kernel_trap(enum mmix_trap_class event, struct mmix_trap_state *state)
 
   if (event == MMIX_TRAP_EXTERNAL) {
     trap_external(state);
+    // Interrupt-side locks temporarily publish a zero mask. Restore the
+    // interrupted mask before RESUME can immediately deliver another source.
+    mmix_trap_rk_shadow = state->restore_rk;
     return;
   }
   trap_stop(event, "unknown", state, 0);
