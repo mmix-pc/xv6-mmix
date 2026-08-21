@@ -95,8 +95,13 @@ trap_preempt(struct mmix_trap_state *state, uint32 claim)
   mmix_rq_write(state->rq);
   mmix_trap_active = 0;
   yield();
-  if (mmix_trap_active != 0 || mmix_rk_read() != 0)
-    trap_stop(MMIX_TRAP_EXTERNAL, "preemption resume", state, claim);
+  if (mmix_trap_active != 0)
+    trap_stop(MMIX_TRAP_EXTERNAL, "preemption active", state, claim);
+  // A voluntary scheduler path may leave only the program mask enabled.
+  // Re-enter the suspended dynamic trap with the hardware mask cleared.
+  mmix_intr_mask_write(0);
+  if (mmix_rk_read() != 0)
+    trap_stop(MMIX_TRAP_EXTERNAL, "preemption mask", state, claim);
   mmix_trap_rk_shadow = state->restore_rk;
   mmix_trap_active = 1;
 }
