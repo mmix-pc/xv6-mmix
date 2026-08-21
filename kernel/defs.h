@@ -85,6 +85,8 @@ int             kfork(void);
 int             growproc(int);
 pagetable_t     proc_pagetable(struct proc *);
 void            proc_freepagetable(pagetable_t, uint64);
+int             proc_exec(pagetable_t, uint64, uint64, uint64, uint64,
+                          uint64);
 int             kkill(int);
 int             killed(struct proc*);
 void            setkilled(struct proc*);

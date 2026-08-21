@@ -210,9 +210,10 @@ proc_pagetable(struct proc *p)
 {
   uint index;
 
-  if (p == 0 || !holding(&p->lock) || p->state != USED ||
-      p->pagetable != 0)
-    panic("proc pagetable");
+  if (p == 0)
+    return 0;
+  // A replacement image uses the process slot's existing ASN but remains
+  // inactive until proc_exec commits it.
   index = proc_index(p);
   return uvmcreate(MMIX_USER_ASN_FIRST + index);
 }
@@ -285,37 +286,69 @@ proc_user_alloc(void (*kernel_entry)(void))
   return proc_user_alloc_internal(kernel_entry, 1);
 }
 
-// User entry will consume this once the trap return path is connected.
-static __attribute__((used)) int
-proc_user_init(struct proc *p, uint64 entry)
+static int
+proc_user_context(pagetable_t pagetable, struct trapframe *trapframe,
+                  uint64 entry, uint64 stack, uint64 argc, uint64 argv)
 {
   struct mmix_initial_user_context initial;
+  uint64 argv_size;
 
-  if (p == 0 || !holding(&p->lock) || p->state != USED ||
-      p->pagetable == 0 || p->trapframe == 0 ||
-      p->trapframe->user_state != 0 || entry < MMIX_USER_IMAGE_BASE ||
-      entry >= p->sz || !user_mapping_has(p->pagetable, entry, PTE_X) ||
-      !user_stacks_valid(p->pagetable))
+  if (pagetable == 0 || trapframe == 0 || entry < MMIX_USER_IMAGE_BASE ||
+      !user_mapping_has(pagetable, entry, PTE_X) ||
+      !user_stacks_valid(pagetable) || argc > MAXARG ||
+      (stack & (sizeof(uint64) - 1)) != 0 || stack < MMIX_USER_STACK_BASE ||
+      stack > MMIX_USER_STACK_TOP)
+    return -1;
+  argv_size = (argc + 1) * sizeof(uint64);
+  if ((argc != 0 && argv == 0) ||
+      (argv != 0 && (argv < stack || argv > MMIX_USER_STACK_TOP - argv_size)))
     return -1;
 
   memset(&initial, 0, sizeof(initial));
-  initial.globals[MMIX_ABI_FP - MMIX_ABI_GLOBAL_FIRST] =
-    MMIX_USER_STACK_TOP;
-  initial.globals[MMIX_ABI_SP - MMIX_ABI_GLOBAL_FIRST] =
-    MMIX_USER_STACK_TOP;
+  initial.globals[0] = argc;
+  initial.globals[1] = argv;
+  initial.globals[MMIX_ABI_FP - MMIX_ABI_GLOBAL_FIRST] = stack;
+  initial.globals[MMIX_ABI_SP - MMIX_ABI_GLOBAL_FIRST] = stack;
   initial.rj = entry;
   initial.rg_ra = (uint64)MMIX_ABI_GLOBAL_FIRST << 56;
-  if (copyout(p->pagetable, MMIX_USER_REGISTER_STACK_BASE, (char *)&initial,
+  if (copyout(pagetable, MMIX_USER_REGISTER_STACK_BASE, (char *)&initial,
               sizeof(initial)) < 0)
     return -1;
 
-  memset(p->trapframe, 0, sizeof(*p->trapframe));
-  p->trapframe->user_state =
+  memset(trapframe, 0, sizeof(*trapframe));
+  trapframe->user_state =
     MMIX_USER_REGISTER_STACK_BASE + MMIX_CONTEXT_INITIAL_STATE_OFFSET;
-  p->trapframe->user_rv = p->pagetable->rv;
-  p->trapframe->user_rk = MMIX_PROC_USER_RK;
-  p->trapframe->rww = entry;
-  p->trapframe->rxx = MMIX_DYNAMIC_TRAP_RESUME_NEXT;
+  trapframe->user_rv = pagetable->rv;
+  trapframe->user_rk = MMIX_PROC_USER_RK;
+  trapframe->rww = entry;
+  trapframe->rxx = MMIX_DYNAMIC_TRAP_RESUME_NEXT;
+  return 0;
+}
+
+// Commit a fully prepared replacement image for the current process. The
+// caller retains ownership of pagetable if validation fails.
+int
+proc_exec(pagetable_t pagetable, uint64 sz, uint64 entry, uint64 stack,
+          uint64 argc, uint64 argv)
+{
+  struct trapframe next;
+  struct proc *p = myproc();
+  pagetable_t oldpagetable;
+  uint64 oldsz;
+
+  if (p == 0 || p->state != RUNNING || p->pagetable == 0 || p->trapframe == 0 ||
+      pagetable == 0 || pagetable == p->pagetable ||
+      MMIX_RV_N(pagetable->rv) != MMIX_RV_N(p->pagetable->rv) ||
+      sz < MMIX_USER_IMAGE_BASE || sz > MMIX_USER_HEAP_LIMIT || entry >= sz ||
+      proc_user_context(pagetable, &next, entry, stack, argc, argv) < 0)
+    return -1;
+
+  oldpagetable = p->pagetable;
+  oldsz = p->sz;
+  p->pagetable = pagetable;
+  p->sz = sz;
+  *p->trapframe = next;
+  proc_freepagetable(oldpagetable, oldsz);
   return 0;
 }
 

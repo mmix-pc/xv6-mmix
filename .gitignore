@@ -4,6 +4,7 @@ _*
 *.d
 *.asm
 *.sym
+*.readobj
 *.img
 /mkfs/mkfs
 /kernel/kernel

@@ -6,7 +6,7 @@
 #include "kernel/fcntl.h"
 #include "kernel/syscall.h"
 #include "kernel/memlayout.h"
-#include "kernel/riscv.h"
+#include "kernel/mmix.h"
 
 //
 // Tests xv6 system calls.  usertests without arguments runs them all
@@ -2125,10 +2125,13 @@ sbrkmuch(char *s)
 void
 kernmem(char *s)
 {
-  char *a;
   int pid;
 
-  for (a = (char *)(KERNBASE); a < (char *)(KERNBASE + 2000000); a += 50000) {
+  for (uint64 address = MMIX_PHYSICAL_ALIAS_BIT | KERNEL_LOAD;
+       address < (MMIX_PHYSICAL_ALIAS_BIT | (KERNEL_LOAD + 2000000));
+       address += 50000) {
+    char *a = (char *)address;
+
     pid = fork();
     if (pid < 0) {
       printf("%s: fork failed\n", s);
@@ -2145,11 +2148,11 @@ kernmem(char *s)
   }
 }
 
-// user code should not be able to write to addresses above MAXVA.
+// These sampled addresses at and above MMIX_USER_HEAP_LIMIT must be unmapped.
 void
 MAXVAplus(char *s)
 {
-  volatile uint64 a = MAXVA;
+  volatile uint64 a = MMIX_USER_HEAP_LIMIT;
   for (; a != 0; a <<= 1) {
     int pid;
     pid = fork();
@@ -2349,7 +2352,6 @@ void
 fsfull()
 {
   int nfiles;
-  int fsblocks = 0;
 
   printf("fsfull test\n");
 
@@ -2373,7 +2375,6 @@ fsfull()
       if (cc < BSIZE)
         break;
       total += cc;
-      fsblocks++;
     }
     printf("wrote %d bytes\n", total);
     close(fd);
@@ -2419,7 +2420,7 @@ stacktest(char *s)
 
   pid = fork();
   if (pid == 0) {
-    char *sp = (char *)r_sp();
+    char *sp = (char *)mmix_sp_read();
     sp -= USERSTACK * PGSIZE;
     // the *sp should cause a trap.
     printf("%s: stacktest: read below stack %d\n", s, *sp);
@@ -2716,19 +2717,19 @@ lazy_copy(char *s)
 void
 lazy_sbrk(char *s)
 {
-  // sbrk() takes just int, so take 2^30-sized steps towards MAXVA
+  // sbrk() takes just int, so approach MMIX_USER_HEAP_LIMIT in 1-MiB steps.
   char *p = sbrk(0);
-  while ((uint64)p < MAXVA - (1 << 30)) {
-    p = sbrklazy(1 << 30);
+  while ((uint64)p < MMIX_USER_HEAP_LIMIT - (1 << 20)) {
+    p = sbrklazy(1 << 20);
     if (p < 0) {
-      printf("sbrklazy(%d) returned %p\n", 1 << 30, p);
+      printf("sbrklazy(%d) returned %p\n", 1 << 20, p);
       exit(1);
     }
 
     p = sbrklazy(0);
   }
 
-  int n = TRAPFRAME - PGSIZE - (uint64)p;
+  int n = MMIX_USER_HEAP_LIMIT - PGSIZE - (uint64)p;
 
   char *p1 = sbrklazy(n);
   if (p1 < 0 || p1 != p) {
@@ -2737,8 +2738,8 @@ lazy_sbrk(char *s)
   }
 
   p = sbrk(PGSIZE);
-  if (p < 0 || (uint64)p != TRAPFRAME - PGSIZE) {
-    printf("sbrk(%d) returned %p, not expected TRAPFRAME-PGSIZE\n", PGSIZE, p);
+  if (p < 0 || (uint64)p != MMIX_USER_HEAP_LIMIT - PGSIZE) {
+    printf("sbrk(%d) returned %p, not expected heap-limit-PGSIZE\n", PGSIZE, p);
     exit(1);
   }
 

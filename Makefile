@@ -28,6 +28,7 @@ OBJS = \
 CC = clang
 LD = ld.lld
 OBJDUMP = llvm-objdump
+READOBJ = llvm-readobj
 QEMU = qemu-system-mmix
 
 CFLAGS = -Wall -Werror -Wno-unknown-attributes -O0 -fno-omit-frame-pointer
@@ -47,6 +48,8 @@ CFLAGS += -I.
 
 ASFLAGS = --target=mmix
 LDFLAGS = -m elf64mmix
+# exec requires PT_LOAD offsets and alignment to match 8-KiB MMIX pages.
+USER_LDFLAGS = $(LDFLAGS) -z max-page-size=8192
 
 $K/kernel: $(OBJS) $K/kernel.ld
 	$(LD) $(LDFLAGS) -T $K/kernel.ld -o $K/kernel $(OBJS) 
@@ -71,21 +74,28 @@ tags: $(OBJS)
 ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o
 
 _%: %.o $(ULIB) $U/user.ld
-	$(LD) $(LDFLAGS) -T $U/user.ld -o $@ $< $(ULIB)
+	$(LD) $(USER_LDFLAGS) -T $U/user.ld -o $@ $< $(ULIB)
 	$(OBJDUMP) -S $@ > $*.asm
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $*.sym
+	$(READOBJ) --file-headers --program-headers --sections --symbols \
+	  --relocations $@ > $*.readobj
+
+$U/_forktest: $U/forktest.o $U/ulib.o $U/usys.o $U/user.ld
+	# Keep forktest small so it can exhaust the process table.
+	$(LD) $(USER_LDFLAGS) -T $U/user.ld -o $@ $U/forktest.o $U/ulib.o $U/usys.o
+	$(OBJDUMP) -S $@ > $U/forktest.asm
+	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $U/forktest.sym
+	$(READOBJ) --file-headers --program-headers --sections --symbols \
+	  --relocations $@ > $U/forktest.readobj
+
+$U/%.o: $U/%.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$U/%.o: $U/%.S
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 $U/usys.S : $U/usys.pl
 	perl $U/usys.pl > $U/usys.S
-
-$U/usys.o : $U/usys.S
-	$(CC) $(CFLAGS) -c -o $U/usys.o $U/usys.S
-
-$U/_forktest: $U/forktest.o $(ULIB)
-	# forktest has less library code linked in - needs to be small
-	# in order to be able to max out the proc table.
-	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $U/_forktest $U/forktest.o $U/ulib.o $U/usys.o
-	$(OBJDUMP) -S $U/_forktest > $U/forktest.asm
 
 mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
 	gcc -Wno-unknown-attributes -I. -o mkfs/mkfs mkfs/mkfs.c
@@ -95,6 +105,7 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
 # details:
 # http://www.gnu.org/software/make/manual/html_node/Chained-Rules.html
 .PRECIOUS: %.o
+.PRECIOUS: $U/%.o
 
 UPROGS=\
 	$U/_cat\
@@ -125,7 +136,7 @@ fs.img: mkfs/mkfs README $(UPROGS)
 
 clean: 
 	rm -f *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
-	*/*.o */*.d */*.asm */*.sym \
+	*/*.o */*.d */*.asm */*.sym */*.readobj \
 	$K/kernel fs.img \
 	mkfs/mkfs .gdbinit \
         $U/usys.S \
