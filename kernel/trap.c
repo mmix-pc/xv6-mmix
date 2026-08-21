@@ -16,6 +16,8 @@ extern void mmix_user_resume(void);
 volatile uint64 mmix_trap_active;
 uint64 mmix_trap_vector;
 volatile uint64 mmix_user_trapframe;
+uint ticks;
+struct spinlock tickslock;
 
 static void
 trap_report(enum mmix_trap_class event, const char *cause,
@@ -139,6 +141,10 @@ trap_timer_service(uint64 rq, uint64 restore_rk, uint64 rxx, uint32 *claim)
     return "controller complete";
   if (mmix_timer_record_tick() != MMIX_TIMER_OK)
     return "tick overflow";
+  acquire(&tickslock);
+  ticks++;
+  wakeup(&ticks);
+  release(&tickslock);
 
   return 0;
 }
@@ -317,13 +323,22 @@ usertrap(void)
       kexit(-1);
     yield();
   } else {
-    if (!user_syscall_trap(p)) {
+    int is_syscall = user_syscall_trap(p);
+
+    if (!is_syscall) {
       user_trap_report("unexpected trap", p, 0);
       setkilled(p);
     }
     // Forced entry also performed GET rQ. Finish the CPU-owned handoff even
     // when the process exits instead of reaching the resume assembly.
     mmix_rq_write(trapframe->rq);
+    if (is_syscall) {
+      if (killed(p))
+        kexit(-1);
+      mmix_intr_mask_write(MMIX_KERNEL_TRAP_MASK);
+      syscall();
+      mmix_intr_mask_write(0);
+    }
   }
 
   if (killed(p))
@@ -340,6 +355,8 @@ trapinit(void)
 
   mmix_intr_mask_write(0);
   mmix_trap_active = 0;
+  ticks = 0;
+  initlock(&tickslock, "time");
   mmix_ra_write(mmix_ra_disable_trips(mmix_ra_read()));
 
   if (ro < REGISTER_STACK_BASE || ro >= REGISTER_STACK_LIMIT ||

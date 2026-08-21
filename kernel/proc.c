@@ -45,6 +45,8 @@ struct proc proc[NPROC];
 
 static int nextpid = 1;
 static struct spinlock pid_lock;
+// Protects parent linkage and prevents a child exit from racing with wait.
+static struct spinlock wait_lock;
 
 static uint
 proc_index(struct proc *p)
@@ -195,6 +197,7 @@ procinit(void)
   struct proc *p;
 
   initlock(&pid_lock, "nextpid");
+  initlock(&wait_lock, "wait_lock");
   for (p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
     p->state = UNUSED;
@@ -374,6 +377,50 @@ fail:
   return 0;
 }
 
+static void
+proc_user_entry(void)
+{
+  struct proc *p = myproc();
+
+  if (p == 0 || !holding(&p->lock) || p->state != RUNNING)
+    panic("user process entry");
+  release(&p->lock);
+  for (;;) {
+    usertrapret();
+    usertrap();
+  }
+}
+
+int
+kfork(void)
+{
+  struct proc *parent = myproc();
+  struct proc *child;
+  int pid;
+
+  if (parent == 0 || parent->cwd != 0)
+    return -1;
+  // FIXME: duplicate descriptor and cwd references when filesystem-backed
+  // user processes are enabled.
+  for (int fd = 0; fd < NOFILE; fd++)
+    if (parent->ofile[fd] != 0)
+      return -1;
+
+  child = proc_user_clone(parent, proc_user_entry);
+  if (child == 0)
+    return -1;
+  pid = child->pid;
+  release(&child->lock);
+
+  acquire(&wait_lock);
+  child->parent = parent;
+  release(&wait_lock);
+
+  acquire(&child->lock);
+  proc_start(child);
+  return pid;
+}
+
 static int
 proc_user_grow(struct proc *p, int n)
 {
@@ -501,8 +548,20 @@ yield(void)
   release(&p->lock);
 }
 
+static void
+reparent(struct proc *p)
+{
+  struct proc *new_parent = p->parent;
+
+  for (struct proc *child = proc; child < &proc[NPROC]; child++)
+    if (child->parent == p)
+      child->parent = new_parent;
+  if (new_parent != 0)
+    wakeup(new_parent);
+}
+
 // Exit the current process without returning through its user continuation.
-// Its address space remains owned by the ZOMBIE until a reaper releases it.
+// Its address space remains owned by the ZOMBIE until its parent reaps it.
 void
 kexit(int status)
 {
@@ -518,13 +577,57 @@ kexit(int status)
     if (p->ofile[fd] != 0)
       panic("exit file");
 
+  acquire(&wait_lock);
+  reparent(p);
+  if (p->parent != 0)
+    wakeup(p->parent);
   acquire(&p->lock);
   if (p->state != RUNNING)
     panic("exit state");
   p->xstate = status;
   p->state = ZOMBIE;
+  release(&wait_lock);
   sched();
   panic("zombie exit");
+}
+
+int
+kwait(uint64 address)
+{
+  struct proc *p = myproc();
+
+  acquire(&wait_lock);
+  for (;;) {
+    int have_children = 0;
+
+    for (struct proc *child = proc; child < &proc[NPROC]; child++) {
+      if (child->parent != p)
+        continue;
+      acquire(&child->lock);
+      have_children = 1;
+      if (child->state == ZOMBIE) {
+        int pid = child->pid;
+
+        if (address != 0 &&
+            copyout(p->pagetable, address, (char *)&child->xstate,
+                    sizeof(child->xstate)) < 0) {
+          release(&child->lock);
+          release(&wait_lock);
+          return -1;
+        }
+        proc_user_free(child);
+        release(&child->lock);
+        release(&wait_lock);
+        return pid;
+      }
+      release(&child->lock);
+    }
+    if (!have_children || killed(p)) {
+      release(&wait_lock);
+      return -1;
+    }
+    sleep(p, &wait_lock);
+  }
 }
 
 // Atomically release a condition lock and sleep on chan. The process keeps
@@ -558,7 +661,7 @@ wakeup(void *chan)
   struct proc *p;
   struct proc *self = myproc();
 
-  if (chan == 0 || self == 0)
+  if (chan == 0)
     panic("wakeup chan");
   for (p = proc; p < &proc[NPROC]; p++) {
     if (p != self) {

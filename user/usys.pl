@@ -16,9 +16,8 @@ sub entry {
 	print ".global $name\n";
 	print "$name:\n";
     }
-    print " li a7, SYS_${name}\n";
-    print " ecall\n";
-    print " ret\n";
+    print " TRAP SYS_${name},0,0\n";
+    print " POP 1,0\n";
 }
 	
 entry("fork");

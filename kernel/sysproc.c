@@ -1,5 +1,5 @@
 #include "types.h"
-#include "riscv.h"
+#include "mmix.h"
 #include "defs.h"
 #include "param.h"
 #include "memlayout.h"
@@ -47,20 +47,10 @@ sys_sbrk(void)
   argint(1, &t);
   addr = myproc()->sz;
 
-  if (t == SBRK_EAGER || n < 0) {
-    if (growproc(n) < 0) {
-      return -1;
-    }
-  } else {
-    // Lazily allocate memory for this process: increase its memory
-    // size but don't allocate memory. If the processes uses the
-    // memory, vmfault() will allocate it.
-    if (addr + n < addr)
-      return -1;
-    if (addr + n > TRAPFRAME)
-      return -1;
-    myproc()->sz += n;
-  }
+  // Recoverable user page faults are not enabled, so a positive lazy request
+  // cannot safely publish an unmapped extension. Shrinking needs no fault.
+  if ((t != SBRK_EAGER && n >= 0) || growproc(n) < 0)
+    return -1;
   return addr;
 }
 

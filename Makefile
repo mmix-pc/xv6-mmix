@@ -13,6 +13,8 @@ OBJS = \
   $K/kcontext.o \
   $K/swtch.o \
   $K/proc.o \
+  $K/syscall.o \
+  $K/sysproc.o \
   $K/early_selftest.o \
   $K/intc.o \
   $K/timer.o \
