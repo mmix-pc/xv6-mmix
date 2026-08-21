@@ -501,6 +501,32 @@ yield(void)
   release(&p->lock);
 }
 
+// Exit the current process without returning through its user continuation.
+// Its address space remains owned by the ZOMBIE until a reaper releases it.
+void
+kexit(int status)
+{
+  struct proc *p = myproc();
+
+  if (p == 0)
+    panic("exit proc");
+  // FIXME: replace these invariants with descriptor and cwd teardown before
+  // filesystem-backed process creation is enabled.
+  if (p->cwd != 0)
+    panic("exit cwd");
+  for (int fd = 0; fd < NOFILE; fd++)
+    if (p->ofile[fd] != 0)
+      panic("exit file");
+
+  acquire(&p->lock);
+  if (p->state != RUNNING)
+    panic("exit state");
+  p->xstate = status;
+  p->state = ZOMBIE;
+  sched();
+  panic("zombie exit");
+}
+
 // Atomically release a condition lock and sleep on chan. The process keeps
 // exclusive ownership of its software and register stacks while asleep.
 void

@@ -109,42 +109,225 @@ trap_preempt(struct mmix_trap_state *state, uint32 claim)
   mmix_trap_active = 1;
 }
 
-static void
-trap_external(struct mmix_trap_state *state)
+static const char *
+trap_timer_service(uint64 rq, uint64 restore_rk, uint64 rxx, uint32 *claim)
 {
-  uint32 irq = 0;
   int pending;
   int status;
 
-  if (!mmix_rq_intc_pending(state->rq, state->restore_rk))
-    trap_stop(MMIX_TRAP_EXTERNAL, "masked request", state, irq);
-  if (state->rxx != MMIX_DYNAMIC_TRAP_RESUME_NEXT)
-    trap_stop(MMIX_TRAP_EXTERNAL, "unsupported resume", state, irq);
+  *claim = 0;
+  if (!mmix_rq_intc_pending(rq, restore_rk))
+    return "masked request";
+  if (rxx != MMIX_DYNAMIC_TRAP_RESUME_NEXT)
+    return "unsupported resume";
 
-  status = mmix_intc_claim(&irq);
+  status = mmix_intc_claim(claim);
   if (status == MMIX_INTC_NO_IRQ)
-    trap_stop(MMIX_TRAP_EXTERNAL, "zero claim", state, irq);
+    return "zero claim";
   if (status != MMIX_INTC_OK)
-    trap_stop(MMIX_TRAP_EXTERNAL, "invalid claim", state, irq);
-  if (irq != MMIX_TIMER_IRQ)
-    trap_stop(MMIX_TRAP_EXTERNAL, "unexpected claim", state, irq);
+    return "invalid claim";
+  if (*claim != MMIX_TIMER_IRQ)
+    return "unexpected claim";
   if (mmix_timer_pending(&pending) != MMIX_TIMER_OK || !pending)
-    trap_stop(MMIX_TRAP_EXTERNAL, "timer not pending", state, irq);
+    return "timer not pending";
 
   if (mmix_timer_arm_next() != MMIX_TIMER_OK)
-    trap_stop(MMIX_TRAP_EXTERNAL, "timer rearm", state, irq);
+    return "timer rearm";
   if (mmix_timer_acknowledge() != MMIX_TIMER_OK)
-    trap_stop(MMIX_TRAP_EXTERNAL, "timer acknowledge", state, irq);
-  if (mmix_intc_complete(irq) != MMIX_INTC_OK)
-    trap_stop(MMIX_TRAP_EXTERNAL, "controller complete", state, irq);
+    return "timer acknowledge";
+  if (mmix_intc_complete(*claim) != MMIX_INTC_OK)
+    return "controller complete";
   if (mmix_timer_record_tick() != MMIX_TIMER_OK)
-    trap_stop(MMIX_TRAP_EXTERNAL, "tick overflow", state, irq);
+    return "tick overflow";
+
+  return 0;
+}
+
+static void
+trap_external(struct mmix_trap_state *state)
+{
+  uint32 irq;
+  const char *error;
+
+  error = trap_timer_service(state->rq, state->restore_rk, state->rxx, &irq);
+  if (error != 0)
+    trap_stop(MMIX_TRAP_EXTERNAL, error, state, irq);
 
   // GET/PUT rQ is a request handoff. Do not restore the serviced controller
   // bit or RESUME would immediately deliver the same dynamic trap again.
   state->rq &= ~MMIX_RQ_INTC;
 
   trap_preempt(state, irq);
+}
+
+static void
+user_trap_report(const char *cause, struct proc *p, uint32 claim)
+{
+  struct trapframe *trapframe = p->trapframe;
+  uint64 fp = 0;
+  uint64 sp = 0;
+  uint64 address = trapframe->user_state +
+                   MMIX_SAVED_GLOBAL_OFFSET(MMIX_ABI_GLOBAL_FIRST);
+  uint32 intc_enabled = ~(uint32)0;
+  uint32 intc_pending = ~(uint32)0;
+  int timer_pending = -1;
+
+  copyin(p->pagetable, (char *)&fp,
+         address + (MMIX_ABI_FP - MMIX_ABI_GLOBAL_FIRST) * sizeof(uint64),
+         sizeof(fp));
+  copyin(p->pagetable, (char *)&sp,
+         address + (MMIX_ABI_SP - MMIX_ABI_GLOBAL_FIRST) * sizeof(uint64),
+         sizeof(sp));
+  if (mmix_intc_enabled(&intc_enabled) != MMIX_INTC_OK)
+    intc_enabled = ~(uint32)0;
+  if (mmix_intc_pending(&intc_pending) != MMIX_INTC_OK)
+    intc_pending = ~(uint32)0;
+  if (mmix_timer_pending(&timer_pending) != MMIX_TIMER_OK)
+    timer_pending = -1;
+
+  struct mmix_trap_diagnostic diagnostic = {
+    .event_class = "user",
+    .cause = cause,
+    .rq = trapframe->rq,
+    .active_rk = mmix_rk_read(),
+    .restore_rk = trapframe->user_rk,
+    .rww = trapframe->rww,
+    .rxx = trapframe->rxx,
+    .ryy = trapframe->ryy,
+    .rzz = trapframe->rzz,
+    .state = trapframe->user_state,
+    .sp = sp,
+    .fp = fp,
+    .ro = 0,
+    .rs = 0,
+    .rl = 0,
+    .intc_pending = intc_pending,
+    .intc_enabled = intc_enabled,
+    .intc_claim = claim,
+    .timer_pending = timer_pending,
+  };
+
+  mmix_early_print_trap(&diagnostic);
+}
+
+static void
+user_trap_stop(const char *cause, struct proc *p, uint32 claim)
+  __attribute__((noreturn));
+
+static void
+user_trap_stop(const char *cause, struct proc *p, uint32 claim)
+{
+  mmix_intr_mask_write(0);
+  user_trap_report(cause, p, claim);
+  for (;;)
+    asm volatile("SWYM 0, 0, 0");
+}
+
+static const char *
+user_program_cause(uint64 cause)
+{
+  if (cause & MMIX_RQ_PROGRAM_R)
+    return "read fault";
+  if (cause & MMIX_RQ_PROGRAM_W)
+    return "write fault";
+  if (cause & MMIX_RQ_PROGRAM_X)
+    return "execute fault";
+  if (cause & MMIX_RQ_PROGRAM_N)
+    return "negative address";
+  if (cause & MMIX_RQ_PROGRAM_K)
+    return "privileged operation";
+  if (cause & MMIX_RQ_PROGRAM_B)
+    return "illegal instruction";
+  if (cause & MMIX_RQ_PROGRAM_S)
+    return "security violation";
+  if (cause & MMIX_RQ_PROGRAM_P)
+    return "negative instruction";
+  return "unknown cause";
+}
+
+static int
+user_syscall_trap(struct proc *p)
+{
+  struct trapframe *trapframe = p->trapframe;
+  uint instruction = (uint)trapframe->rxx;
+  uint64 origin;
+  pte_t *pte;
+
+  if ((trapframe->rxx & MMIX_DYNAMIC_TRAP_RESUME_NEXT) == 0 ||
+      (instruction & 0xff00ffff) != 0 ||
+      ((instruction >> 16) & 0xff) == 0 ||
+      trapframe->rww < MMIX_USER_IMAGE_BASE + sizeof(uint) ||
+      trapframe->rww >= MMIX_USER_HEAP_LIMIT ||
+      (trapframe->rww & (sizeof(uint) - 1)) != 0)
+    return 0;
+  origin = trapframe->rww - sizeof(uint);
+  pte = walk(p->pagetable, origin, 0);
+  return pte != 0 && kalloc_page_is_managed((void *)mmix_pte_pa(*pte)) &&
+         *pte == mmix_pte_make(mmix_pte_pa(*pte),
+                               MMIX_RV_N(p->pagetable->rv),
+                               mmix_pte_permissions(*pte)) &&
+         (mmix_pte_permissions(*pte) & PTE_X) != 0;
+}
+
+// Dispatch one complete trap saved by the MMIX user-entry assembly. Syscall
+// decoding and execution are layered onto the accepted forced-TRAP case.
+void
+usertrap(void)
+{
+  struct proc *p = myproc();
+  struct trapframe *trapframe;
+  uint64 cause;
+
+  mmix_intr_mask_write(0);
+  if (p == 0 || p->state != RUNNING || holding(&p->lock) ||
+      mmix_user_trapframe != 0 || mmix_trap_active != 0)
+    panic("user trap owner");
+  trapframe = p->trapframe;
+  if (trapframe == 0 || trapframe->flags != MMIX_PROC_TRAPFRAME_READY ||
+      trapframe->kernel_state != 0 || trapframe->reserved != 0 ||
+      (trapframe->user_state & (sizeof(uint64) - 1)) != 0 ||
+      trapframe->user_state < MMIX_USER_REGISTER_STACK_BASE ||
+      trapframe->user_state >= MMIX_USER_REGISTER_STACK_TOP ||
+      trapframe->user_rv != p->pagetable->rv ||
+      trapframe->user_rk != MMIX_PROC_USER_RK ||
+      mmix_rv_read() != MMIX_KERNEL_RV || mmix_rk_read() != 0)
+    panic("user trap state");
+
+  cause = trapframe->rxx & MMIX_RQ_PROGRAM_MASK;
+  if (cause != 0) {
+    const char *name = user_program_cause(cause);
+
+    user_trap_report(name, p, 0);
+    trapframe->rq &= ~MMIX_RQ_PROGRAM_MASK;
+    mmix_rq_write(trapframe->rq);
+    setkilled(p);
+  } else if (trapframe->rxx == MMIX_DYNAMIC_TRAP_RESUME_NEXT &&
+             mmix_rq_intc_pending(trapframe->rq, trapframe->user_rk)) {
+    uint32 irq;
+    const char *error = trap_timer_service(
+      trapframe->rq, trapframe->user_rk, trapframe->rxx, &irq);
+
+    if (error != 0)
+      user_trap_stop(error, p, irq);
+    trapframe->rq &= ~MMIX_RQ_INTC;
+    // The GET performed by user entry is CPU state, not process state. Finish
+    // its handoff before another scheduled context can enable dynamic traps.
+    mmix_rq_write(trapframe->rq);
+    if (killed(p))
+      kexit(-1);
+    yield();
+  } else {
+    if (!user_syscall_trap(p)) {
+      user_trap_report("unexpected trap", p, 0);
+      setkilled(p);
+    }
+    // Forced entry also performed GET rQ. Finish the CPU-owned handoff even
+    // when the process exits instead of reaching the resume assembly.
+    mmix_rq_write(trapframe->rq);
+  }
+
+  if (killed(p))
+    kexit(-1);
 }
 
 void
@@ -203,11 +386,17 @@ usertrapret(void)
   struct proc *p = c->proc;
   struct trapframe *trapframe;
   uint64 alias;
+  uint32 intc_enabled;
 
   mmix_intr_mask_write(0);
   if (p == 0 || p->state != RUNNING || holding(&p->lock) || c->noff != 0 ||
       mmix_user_trapframe != 0 || mmix_trap_active != 0)
     panic("user return owner");
+  if (killed(p))
+    kexit(-1);
+  if (mmix_intc_enabled(&intc_enabled) != MMIX_INTC_OK ||
+      (intc_enabled & (1U << MMIX_TIMER_IRQ)) == 0)
+    panic("user return timer");
   trapframe = p->trapframe;
   if (trapframe == 0 || !kalloc_page_is_managed(trapframe) ||
       ((uint64)trapframe & (PGSIZE - 1)) != 0 || p->pagetable == 0 ||

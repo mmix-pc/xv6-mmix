@@ -143,12 +143,9 @@ mmix_user_resume:
         LDOU r255,r255,MMIX_PROC_TRAPFRAME_RZZ_OFFSET
         PUT rZZ,r255
 
-        // Complete the architectural GET/PUT request handoff using the value
-        // selected by C rather than restoring a stale hardware snapshot.
+        // C completed the entry-side handoff before it could schedule. Pair a
+        // fresh GET with its current value; process snapshots are diagnostic.
         GET r255,rQ
-        GETA r255,mmix_user_trapframe
-        LDOU r255,r255,0
-        LDOU r255,r255,MMIX_PROC_TRAPFRAME_RQ_OFFSET
         PUT rQ,r255
 
         GETA r255,mmix_user_trapframe
