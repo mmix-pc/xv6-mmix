@@ -145,9 +145,31 @@ readsb(int dev, struct superblock *sb)
 void
 fsinit(int dev)
 {
+  struct dinode diskroot;
+  struct inode *root;
+  struct buf *bp;
+
   readsb(dev, &sb);
   initlog(dev, &sb);
   ireclaim(dev);
+
+  // The root directory is part of the on-disk format contract, so reject an
+  // otherwise well-formed image that cannot supply it before boot continues.
+  bp = bread(dev, IBLOCK(ROOTINO, sb));
+  dinode_decode(&diskroot, bp, ROOTINO);
+  brelse(bp);
+  if (diskroot.type != T_DIR || diskroot.nlink < 1)
+    panic("invalid root");
+  begin_op();
+  root = namei("/");
+  if (root == 0)
+    panic("missing root");
+  ilock(root);
+  if (root->inum != ROOTINO || root->type != T_DIR)
+    panic("invalid root");
+  iunlockput(root);
+  end_op();
+  printk("filesystem: root ready\n");
 }
 
 // Zero a block.

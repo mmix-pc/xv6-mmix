@@ -41,6 +41,8 @@ LD = ld.lld
 OBJDUMP = llvm-objdump
 READOBJ = llvm-readobj
 QEMU = qemu-system-mmix
+HOSTCC ?= cc
+HOSTCFLAGS ?= -Wall -Werror -O2
 
 CFLAGS = -Wall -Werror -Wno-unknown-attributes -O0 -fno-omit-frame-pointer
 CFLAGS += --target=mmix
@@ -61,6 +63,8 @@ ASFLAGS = --target=mmix
 LDFLAGS = -m elf64mmix
 # exec requires PT_LOAD offsets and alignment to match 8-KiB MMIX pages.
 USER_LDFLAGS = $(LDFLAGS) -z max-page-size=8192
+
+all: $K/kernel fs.img
 
 $K/kernel: $(OBJS) $K/kernel.ld
 	$(LD) $(LDFLAGS) -T $K/kernel.ld -o $K/kernel $(OBJS) 
@@ -112,7 +116,7 @@ $U/usys.S : $U/usys.pl
 	perl $U/usys.pl > $U/usys.S
 
 mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
-	gcc -Wno-unknown-attributes -I. -o mkfs/mkfs mkfs/mkfs.c
+	$(HOSTCC) $(HOSTCFLAGS) -Wno-unknown-attributes -I. -o $@ $<
 
 # Prevent deletion of intermediate files, e.g. cat.o, after first build, so
 # that disk image changes after first build are persistent until clean.  More
@@ -156,6 +160,6 @@ clean:
         $U/usys.S \
 	$(UPROGS)
 
-.PHONY: qemu fmt
+.PHONY: all qemu tags clean fmt
 fmt:
 	clang-format -i $(wildcard kernel/*.[ch] user/*.[ch] mkfs/*.c)
