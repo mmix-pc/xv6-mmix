@@ -3,25 +3,11 @@
 #include "memlayout.h"
 #include "mmix.h"
 #include "defs.h"
-#include "cpu.h"
 #include "intc.h"
 #include "kcontext.h"
 #include "timer.h"
 
-static void enter_scheduler(void) __attribute__((noreturn));
 void main(void) __attribute__((noreturn));
-
-static void
-enter_scheduler(void)
-{
-  struct context startup_context;
-
-  kcontext_prepare(&cpus[BOOT_CPU_ID].context,
-                        MMIX_CONTEXT_SCHEDULER_SLOT, scheduler);
-  intr_off();
-  swtch(&startup_context, &cpus[BOOT_CPU_ID].context);
-  panic("scheduler returned");
-}
 
 // start() jumps here after establishing the minimal MMIX boot state.
 void
@@ -51,5 +37,5 @@ main(void)
   uartenable();
   userinit();         // first user process
 
-  enter_scheduler();
+  scheduler();
 }

@@ -563,10 +563,25 @@ myproc(void)
   return p;
 }
 
-// Per-CPU process scheduler. A process switches out holding p->lock; this
-// loop releases that lock only after the scheduler context is restored.
+static void scheduler_loop(void) __attribute__((noreturn));
+
+// Enter the per-CPU scheduler on its dedicated MMIX context.
 void
 scheduler(void)
+{
+  struct context startup_context;
+  struct cpu *c = mycpu();
+
+  kcontext_prepare(&c->context, MMIX_CONTEXT_SCHEDULER_SLOT, scheduler_loop);
+  intr_off();
+  swtch(&startup_context, &c->context);
+  panic("scheduler returned");
+}
+
+// A process switches out holding p->lock; this loop releases that lock only
+// after the scheduler context is restored.
+static void
+scheduler_loop(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
