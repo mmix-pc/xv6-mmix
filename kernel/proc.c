@@ -48,6 +48,7 @@ static int nextpid = 1;
 static struct spinlock pid_lock;
 // Protects parent linkage and prevents a child exit from racing with wait.
 static struct spinlock wait_lock;
+static struct proc *initproc;
 
 static uint
 proc_index(struct proc *p)
@@ -172,37 +173,6 @@ proc_start(struct proc *p)
     panic("proc start");
   p->state = RUNNABLE;
   release(&p->lock);
-}
-
-// Log recovery may sleep for VirtIO, so run it from a scheduler-owned process.
-static void
-proc_fsinit_entry(void)
-{
-  struct proc *p = myproc();
-
-  if (p == 0 || !holding(&p->lock) || p->state != RUNNING)
-    panic("fsinit process entry");
-  release(&p->lock);
-  fsinit(ROOTDEV);
-
-  acquire(&p->lock);
-  if (p->state != RUNNING || p->chan != 0 || !proc_user_state_empty(p))
-    panic("fsinit process exit");
-  proc_clear(p, 0);
-  p->state = UNUSED;
-  sched();
-  panic("fsinit process returned");
-}
-
-void
-proc_fsinit_start(void)
-{
-  struct proc *p = proc_alloc(proc_fsinit_entry);
-
-  if (p == 0)
-    panic("fsinit process alloc");
-  safestrcpy(p->name, "fsinit", sizeof(p->name));
-  proc_start(p);
 }
 
 // Release a process slot after its caller has freed all attached resources.
@@ -442,6 +412,17 @@ fail:
   return 0;
 }
 
+static void proc_user_run(void) __attribute__((noreturn));
+
+static void
+proc_user_run(void)
+{
+  for (;;) {
+    usertrapret();
+    usertrap();
+  }
+}
+
 static void
 proc_user_entry(void)
 {
@@ -450,10 +431,44 @@ proc_user_entry(void)
   if (p == 0 || !holding(&p->lock) || p->state != RUNNING)
     panic("user process entry");
   release(&p->lock);
-  for (;;) {
-    usertrapret();
-    usertrap();
-  }
+  proc_user_run();
+}
+
+// The first process performs disk-backed initialization from a schedulable
+// kernel context, then replaces its empty image with /init and enters user
+// space through the same path used by every later process.
+static void
+proc_init_entry(void)
+{
+  char *argv[] = {"init", 0};
+  struct proc *p = myproc();
+
+  if (p == 0 || p != initproc || !holding(&p->lock) || p->state != RUNNING)
+    panic("init process entry");
+  release(&p->lock);
+
+  fsinit(ROOTDEV);
+  p->cwd = namei("/");
+  if (p->cwd == 0)
+    panic("init cwd");
+  if (kexec("/init", argv) < 0)
+    panic("exec init");
+  proc_user_run();
+}
+
+// Set up the first process without embedding a bootstrap image in the kernel.
+// Its scheduler-owned entry performs operations that may sleep, including log
+// recovery and loading /init from the file system.
+void
+userinit(void)
+{
+  struct proc *p = proc_user_alloc_internal(proc_init_entry, 0);
+
+  if (p == 0)
+    panic("userinit");
+  initproc = p;
+  safestrcpy(p->name, "init", sizeof(p->name));
+  proc_start(p);
 }
 
 int
@@ -630,13 +645,12 @@ yield(void)
 static void
 reparent(struct proc *p)
 {
-  struct proc *new_parent = p->parent;
-
-  for (struct proc *child = proc; child < &proc[NPROC]; child++)
-    if (child->parent == p)
-      child->parent = new_parent;
-  if (new_parent != 0)
-    wakeup(new_parent);
+  for (struct proc *child = proc; child < &proc[NPROC]; child++) {
+    if (child->parent == p) {
+      child->parent = initproc;
+      wakeup(initproc);
+    }
+  }
 }
 
 // Exit the current process without returning through its user continuation.
@@ -648,6 +662,8 @@ kexit(int status)
 
   if (p == 0)
     panic("exit proc");
+  if (p == initproc)
+    panic("init exiting");
   for (int fd = 0; fd < NOFILE; fd++) {
     if (p->ofile[fd] != 0) {
       struct file *f = p->ofile[fd];

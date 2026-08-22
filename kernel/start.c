@@ -23,7 +23,7 @@ void virtio_disk_init(void);
 void binit(void);
 void iinit(void);
 void fileinit(void);
-void proc_fsinit_start(void);
+void userinit(void);
 
 struct mmix_boot_state mmix_boot;
 
@@ -68,7 +68,7 @@ mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
   if (mmix_intc_set_enabled(MMIX_TIMER_IRQ, 1) != MMIX_INTC_OK)
     panic("timer irq enable");
   uartenable();
-  proc_fsinit_start();
+  userinit();
   intr_off();
   swtch(&boot_context, &cpus[BOOT_CPU_ID].context);
   panic("scheduler returned");
