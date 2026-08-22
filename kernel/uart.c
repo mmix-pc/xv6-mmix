@@ -58,7 +58,7 @@ uart_write(uint64 offset, uint8 value)
 }
 
 void
-mmix_early_uart_init(void)
+early_uart_init(void)
 {
   // Keep all UART interrupt sources disabled during early boot.
   uart_write(UART_IER, 0);
@@ -76,7 +76,7 @@ mmix_early_uart_init(void)
 }
 
 void
-mmix_early_uart_putc(int c)
+early_uart_putc(int c)
 {
   while ((uart_read(UART_LSR) & UART_LSR_THR_EMPTY) == 0)
     ;
@@ -84,7 +84,7 @@ mmix_early_uart_putc(int c)
   uart_write(UART_THR, (uint8)c);
 }
 
-// Adopt the UART state established by mmix_early_uart_init(). Interrupts stay
+// Adopt the UART state established by early_uart_init(). Interrupts stay
 // disabled until the console, printk lock, and controller are ready.
 void
 uartinit(void)
@@ -124,7 +124,7 @@ uartenable(void)
   while ((c = uartgetc()) >= 0)
     consoleintr(c);
   (void)uart_read(UART_IIR);
-  if (mmix_intc_set_enabled(UART0_IRQ, 1) != MMIX_INTC_OK)
+  if (intc_set_enabled(UART0_IRQ, 1) != MMIX_INTC_OK)
     panic("uart irq enable");
   uart_write(UART_IER, UART_IER_RX_ENABLE | UART_IER_TX_ENABLE);
   if (uart_read(UART_IER) != (UART_IER_RX_ENABLE | UART_IER_TX_ENABLE))
@@ -158,7 +158,7 @@ uartputc_sync(int c)
     for (;;)
       ;
 
-  mmix_early_uart_putc(c);
+  early_uart_putc(c);
 
   if (!panicking)
     pop_off();

@@ -13,12 +13,12 @@ enum mmix_timer_status {
   MMIX_TIMER_BAD_DEADLINE = -4,
 };
 
-int mmix_timer_init(void);
-int mmix_timer_pending(int *pending);
-int mmix_timer_disable(void);
-int mmix_timer_acknowledge(void);
-int mmix_timer_arm_next(void);
-int mmix_timer_record_tick(void);
-uint64 mmix_timer_ticks(void);
+int timer_init(void);
+int timer_pending(int *pending);
+int timer_disable(void);
+int timer_acknowledge(void);
+int timer_arm_next(void);
+int timer_record_tick(void);
+uint64 timer_ticks(void);
 
 #endif

@@ -56,7 +56,7 @@ intc_write(uint64 offset, uint32 value)
 }
 
 int
-mmix_intc_init(void)
+intc_init(void)
 {
   uint64 enable;
 
@@ -71,7 +71,7 @@ mmix_intc_init(void)
 }
 
 int
-mmix_intc_pending(uint32 *pending)
+intc_pending(uint32 *pending)
 {
   if (pending == 0)
     return MMIX_INTC_BAD_ARGUMENT;
@@ -83,7 +83,7 @@ mmix_intc_pending(uint32 *pending)
 }
 
 int
-mmix_intc_enabled(uint32 *enabled)
+intc_enabled(uint32 *enabled)
 {
   if (enabled == 0)
     return MMIX_INTC_BAD_ARGUMENT;
@@ -95,7 +95,7 @@ mmix_intc_enabled(uint32 *enabled)
 }
 
 int
-mmix_intc_set_enabled(uint32 irq, int enabled)
+intc_set_enabled(uint32 irq, int enabled)
 {
   uint64 offset;
   uint32 mask;
@@ -117,7 +117,7 @@ mmix_intc_set_enabled(uint32 irq, int enabled)
 }
 
 int
-mmix_intc_claim(uint32 *irq)
+intc_claim(uint32 *irq)
 {
   uint32 claimed;
 
@@ -136,7 +136,7 @@ mmix_intc_claim(uint32 *irq)
 }
 
 int
-mmix_intc_complete(uint32 irq)
+intc_complete(uint32 irq)
 {
   if (!intc_irq_valid(irq))
     return MMIX_INTC_BAD_IRQ;

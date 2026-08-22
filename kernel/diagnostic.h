@@ -25,8 +25,8 @@ struct mmix_trap_diagnostic {
   int timer_pending;
 };
 
-void mmix_diagnostic_boot(const struct mmix_boot_state *boot);
-void mmix_diagnostic_paging(uint64 rv);
-void mmix_diagnostic_trap(const struct mmix_trap_diagnostic *diagnostic);
+void diagnostic_boot(const struct mmix_boot_state *boot);
+void diagnostic_paging(uint64 rv);
+void diagnostic_trap(const struct mmix_trap_diagnostic *diagnostic);
 
 #endif

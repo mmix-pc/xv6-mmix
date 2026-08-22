@@ -16,7 +16,7 @@ enter_scheduler(void)
 {
   struct context startup_context;
 
-  mmix_kcontext_prepare(&cpus[BOOT_CPU_ID].context,
+  kcontext_prepare(&cpus[BOOT_CPU_ID].context,
                         MMIX_CONTEXT_SCHEDULER_SLOT, scheduler);
   intr_off();
   swtch(&startup_context, &cpus[BOOT_CPU_ID].context);
@@ -30,11 +30,11 @@ main(void)
   kinit();            // physical page allocator
   kvminit();          // create kernel page table
   kvminithart();      // turn on paging
-  mmix_kcontext_init();
+  kcontext_init();
   procinit();         // process table
   trapinit();         // trap vectors
   trapinithart();     // install kernel trap vector
-  if (mmix_intc_init() != MMIX_INTC_OK)
+  if (intc_init() != MMIX_INTC_OK)
     panic("intc init");
   consoleinit();
   printkinit();
@@ -42,11 +42,11 @@ main(void)
   iinit();            // inode table
   fileinit();         // file table
   virtio_disk_init(); // emulated hard disk
-  if (mmix_timer_init() != MMIX_TIMER_OK)
+  if (timer_init() != MMIX_TIMER_OK)
     panic("timer init");
-  if (mmix_timer_arm_next() != MMIX_TIMER_OK)
+  if (timer_arm_next() != MMIX_TIMER_OK)
     panic("timer arm");
-  if (mmix_intc_set_enabled(MMIX_TIMER_IRQ, 1) != MMIX_INTC_OK)
+  if (intc_set_enabled(MMIX_TIMER_IRQ, 1) != MMIX_INTC_OK)
     panic("timer irq enable");
   uartenable();
   userinit();         // first user process

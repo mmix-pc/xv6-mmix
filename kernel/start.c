@@ -12,9 +12,9 @@ start(uint64 startup_cpu_id, uint64 bootinfo_pa)
   mmix_boot.startup_cpu_id = startup_cpu_id;
   mmix_boot.bootinfo_pa = bootinfo_pa;
   mmix_boot.bootinfo_status =
-    mmix_bootinfo_decode(startup_cpu_id, bootinfo_pa, &mmix_boot.info);
+    bootinfo_decode(startup_cpu_id, bootinfo_pa, &mmix_boot.info);
 
-  mmix_early_uart_init();
-  mmix_diagnostic_boot(&mmix_boot);
+  early_uart_init();
+  diagnostic_boot(&mmix_boot);
   main();
 }

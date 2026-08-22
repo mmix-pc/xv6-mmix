@@ -24,9 +24,9 @@ trap_report(enum mmix_trap_class event, const char *cause,
             const struct mmix_trap_state *state, uint32 claim)
 {
   const char *event_class = "unknown";
-  uint32 intc_enabled = ~(uint32)0;
-  uint32 intc_pending = ~(uint32)0;
-  int timer_pending = -1;
+  uint32 enabled_irqs = ~(uint32)0;
+  uint32 pending_irqs = ~(uint32)0;
+  int timer_is_pending = -1;
 
   if (event == MMIX_TRAP_FORCED)
     event_class = "forced";
@@ -35,12 +35,12 @@ trap_report(enum mmix_trap_class event, const char *cause,
   else if (event == MMIX_TRAP_EXTERNAL)
     event_class = "external";
 
-  if (mmix_intc_enabled(&intc_enabled) != MMIX_INTC_OK)
-    intc_enabled = ~(uint32)0;
-  if (mmix_intc_pending(&intc_pending) != MMIX_INTC_OK)
-    intc_pending = ~(uint32)0;
-  if (mmix_timer_pending(&timer_pending) != MMIX_TIMER_OK)
-    timer_pending = -1;
+  if (intc_enabled(&enabled_irqs) != MMIX_INTC_OK)
+    enabled_irqs = ~(uint32)0;
+  if (intc_pending(&pending_irqs) != MMIX_INTC_OK)
+    pending_irqs = ~(uint32)0;
+  if (timer_pending(&timer_is_pending) != MMIX_TIMER_OK)
+    timer_is_pending = -1;
 
   struct mmix_trap_diagnostic diagnostic = {
     .event_class = event_class,
@@ -58,13 +58,13 @@ trap_report(enum mmix_trap_class event, const char *cause,
     .ro = state->ro,
     .rs = state->rs,
     .rl = state->rl,
-    .intc_pending = intc_pending,
-    .intc_enabled = intc_enabled,
+    .intc_pending = pending_irqs,
+    .intc_enabled = enabled_irqs,
     .intc_claim = claim,
-    .timer_pending = timer_pending,
+    .timer_pending = timer_is_pending,
   };
 
-  mmix_diagnostic_trap(&diagnostic);
+  diagnostic_trap(&diagnostic);
 }
 
 static void trap_stop(enum mmix_trap_class event, const char *cause,
@@ -125,35 +125,35 @@ trap_device_service(uint64 rq, uint64 restore_rk, uint64 rxx, uint32 *claim,
   if (rxx != MMIX_DYNAMIC_TRAP_RESUME_NEXT)
     return "unsupported resume";
 
-  status = mmix_intc_claim(claim);
+  status = intc_claim(claim);
   if (status == MMIX_INTC_NO_IRQ)
     return "zero claim";
   if (status != MMIX_INTC_OK)
     return "invalid claim";
   if (*claim == UART0_IRQ) {
     uartintr();
-    if (mmix_intc_complete(*claim) != MMIX_INTC_OK)
+    if (intc_complete(*claim) != MMIX_INTC_OK)
       return "controller complete";
     return 0;
   }
   if (*claim == VIRTIO0_IRQ) {
     virtio_disk_intr();
-    if (mmix_intc_complete(*claim) != MMIX_INTC_OK)
+    if (intc_complete(*claim) != MMIX_INTC_OK)
       return "controller complete";
     return 0;
   }
   if (*claim != MMIX_TIMER_IRQ)
     return "unexpected claim";
-  if (mmix_timer_pending(&pending) != MMIX_TIMER_OK || !pending)
+  if (timer_pending(&pending) != MMIX_TIMER_OK || !pending)
     return "timer not pending";
 
-  if (mmix_timer_arm_next() != MMIX_TIMER_OK)
+  if (timer_arm_next() != MMIX_TIMER_OK)
     return "timer rearm";
-  if (mmix_timer_acknowledge() != MMIX_TIMER_OK)
+  if (timer_acknowledge() != MMIX_TIMER_OK)
     return "timer acknowledge";
-  if (mmix_intc_complete(*claim) != MMIX_INTC_OK)
+  if (intc_complete(*claim) != MMIX_INTC_OK)
     return "controller complete";
-  if (mmix_timer_record_tick() != MMIX_TIMER_OK)
+  if (timer_record_tick() != MMIX_TIMER_OK)
     return "tick overflow";
   acquire(&tickslock);
   ticks++;
@@ -192,9 +192,9 @@ user_trap_report(const char *cause, struct proc *p, uint32 claim)
   uint64 sp = 0;
   uint64 address = trapframe->user_state +
                    MMIX_SAVED_GLOBAL_OFFSET(MMIX_ABI_GLOBAL_FIRST);
-  uint32 intc_enabled = ~(uint32)0;
-  uint32 intc_pending = ~(uint32)0;
-  int timer_pending = -1;
+  uint32 enabled_irqs = ~(uint32)0;
+  uint32 pending_irqs = ~(uint32)0;
+  int timer_is_pending = -1;
 
   copyin(p->pagetable, (char *)&fp,
          address + (MMIX_ABI_FP - MMIX_ABI_GLOBAL_FIRST) * sizeof(uint64),
@@ -202,12 +202,12 @@ user_trap_report(const char *cause, struct proc *p, uint32 claim)
   copyin(p->pagetable, (char *)&sp,
          address + (MMIX_ABI_SP - MMIX_ABI_GLOBAL_FIRST) * sizeof(uint64),
          sizeof(sp));
-  if (mmix_intc_enabled(&intc_enabled) != MMIX_INTC_OK)
-    intc_enabled = ~(uint32)0;
-  if (mmix_intc_pending(&intc_pending) != MMIX_INTC_OK)
-    intc_pending = ~(uint32)0;
-  if (mmix_timer_pending(&timer_pending) != MMIX_TIMER_OK)
-    timer_pending = -1;
+  if (intc_enabled(&enabled_irqs) != MMIX_INTC_OK)
+    enabled_irqs = ~(uint32)0;
+  if (intc_pending(&pending_irqs) != MMIX_INTC_OK)
+    pending_irqs = ~(uint32)0;
+  if (timer_pending(&timer_is_pending) != MMIX_TIMER_OK)
+    timer_is_pending = -1;
 
   struct mmix_trap_diagnostic diagnostic = {
     .event_class = "user",
@@ -225,13 +225,13 @@ user_trap_report(const char *cause, struct proc *p, uint32 claim)
     .ro = 0,
     .rs = 0,
     .rl = 0,
-    .intc_pending = intc_pending,
-    .intc_enabled = intc_enabled,
+    .intc_pending = pending_irqs,
+    .intc_enabled = enabled_irqs,
     .intc_claim = claim,
-    .timer_pending = timer_pending,
+    .timer_pending = timer_is_pending,
   };
 
-  mmix_diagnostic_trap(&diagnostic);
+  diagnostic_trap(&diagnostic);
 }
 
 static void
@@ -423,7 +423,7 @@ usertrapret(void)
   struct proc *p = c->proc;
   struct trapframe *trapframe;
   uint64 alias;
-  uint32 intc_enabled;
+  uint32 enabled_irqs;
 
   mmix_intr_mask_write(0);
   if (p == 0 || p->state != RUNNING || holding(&p->lock) || c->noff != 0 ||
@@ -431,8 +431,8 @@ usertrapret(void)
     panic("user return owner");
   if (killed(p))
     kexit(-1);
-  if (mmix_intc_enabled(&intc_enabled) != MMIX_INTC_OK ||
-      (intc_enabled & (1U << MMIX_TIMER_IRQ)) == 0)
+  if (intc_enabled(&enabled_irqs) != MMIX_INTC_OK ||
+      (enabled_irqs & (1U << MMIX_TIMER_IRQ)) == 0)
     panic("user return timer");
   trapframe = p->trapframe;
   if (trapframe == 0 || !kalloc_page_is_managed(trapframe) ||

@@ -10,11 +10,11 @@ enum mmix_intc_status {
   MMIX_INTC_BAD_STATE = -4,
 };
 
-int mmix_intc_init(void);
-int mmix_intc_pending(uint32 *pending);
-int mmix_intc_enabled(uint32 *enabled);
-int mmix_intc_set_enabled(uint32 irq, int enabled);
-int mmix_intc_claim(uint32 *irq);
-int mmix_intc_complete(uint32 irq);
+int intc_init(void);
+int intc_pending(uint32 *pending);
+int intc_enabled(uint32 *enabled);
+int intc_set_enabled(uint32 irq, int enabled);
+int intc_claim(uint32 *irq);
+int intc_complete(uint32 irq);
 
 #endif

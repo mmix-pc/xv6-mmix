@@ -98,7 +98,7 @@ struct mmix_bootinfo {
   uint64 virtio_mmio_count;
 };
 
-int mmix_bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
+int bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
                          struct mmix_bootinfo *decoded);
 
 _Static_assert(sizeof(uint64) == MMIX_BOOTINFO_OCTA_SIZE,

@@ -681,7 +681,7 @@ virtio_disk_init(void)
   virtio_write(VIRTIO_MMIO_QUEUE_READY, 1);
   if (virtio_read(VIRTIO_MMIO_QUEUE_READY) != 1)
     virtio_fail("virtio queue publish");
-  if (mmix_intc_set_enabled(VIRTIO0_IRQ, 1) != MMIX_INTC_OK)
+  if (intc_set_enabled(VIRTIO0_IRQ, 1) != MMIX_INTC_OK)
     virtio_fail("virtio irq enable");
 
   // DRIVER_OK is the final transition after queue and interrupt publication.

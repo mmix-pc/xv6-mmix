@@ -5,7 +5,7 @@
 
 struct context;
 
-void mmix_kcontext_init(void);
-void mmix_kcontext_prepare(struct context *, uint, void (*)(void));
+void kcontext_init(void);
+void kcontext_prepare(struct context *, uint, void (*)(void));
 
 #endif

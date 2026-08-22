@@ -20,7 +20,7 @@ enum {
   (MMIX_TIMER_UNITS_PER_SECOND / MMIX_TIMER_TICKS_PER_SECOND)
 #define MMIX_TIMER_MAX_DEADLINE 0x7fffffffffffffffULL
 
-static volatile uint64 timer_ticks;
+static volatile uint64 tick_count;
 
 static int
 timer_platform_valid(void)
@@ -60,7 +60,7 @@ timer_write(uint64 offset, uint64 value)
 }
 
 int
-mmix_timer_init(void)
+timer_init(void)
 {
   uint64 compare;
   uint64 control;
@@ -69,7 +69,7 @@ mmix_timer_init(void)
   if (!timer_platform_valid())
     return MMIX_TIMER_BAD_PLATFORM;
 
-  timer_ticks = 0;
+  tick_count = 0;
   compare = timer_context_register(MMIX_TIMER_CONTEXT_COMPARE_OFFSET);
   control = timer_context_register(MMIX_TIMER_CONTEXT_CONTROL_OFFSET);
   status = timer_context_register(MMIX_TIMER_CONTEXT_STATUS_OFFSET);
@@ -83,7 +83,7 @@ mmix_timer_init(void)
 }
 
 int
-mmix_timer_pending(int *pending)
+timer_pending(int *pending)
 {
   uint64 status;
 
@@ -100,7 +100,7 @@ mmix_timer_pending(int *pending)
 }
 
 int
-mmix_timer_disable(void)
+timer_disable(void)
 {
   uint64 control;
 
@@ -117,7 +117,7 @@ mmix_timer_disable(void)
 // An expired timer is level-triggered. Rearm it or disable it, acknowledge
 // pending status, and only then complete its interrupt-controller claim.
 int
-mmix_timer_acknowledge(void)
+timer_acknowledge(void)
 {
   uint64 status;
 
@@ -132,7 +132,7 @@ mmix_timer_acknowledge(void)
 }
 
 int
-mmix_timer_arm_next(void)
+timer_arm_next(void)
 {
   uint64 compare;
   uint64 control;
@@ -160,18 +160,18 @@ mmix_timer_arm_next(void)
 }
 
 int
-mmix_timer_record_tick(void)
+timer_record_tick(void)
 {
-  if (timer_ticks == ~0ULL)
+  if (tick_count == ~0ULL)
     return MMIX_TIMER_BAD_STATE;
-  timer_ticks++;
+  tick_count++;
   return MMIX_TIMER_OK;
 }
 
 uint64
-mmix_timer_ticks(void)
+timer_ticks(void)
 {
-  return timer_ticks;
+  return tick_count;
 }
 
 _Static_assert((MMIX_TIMER_UNITS_PER_SECOND % MMIX_TIMER_TICKS_PER_SECOND) == 0,

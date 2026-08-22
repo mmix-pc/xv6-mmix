@@ -155,7 +155,7 @@ proc_alloc(void (*entry)(void))
       proc_clear(p, 1);
       p->pid = allocpid();
       p->state = USED;
-      mmix_kcontext_prepare(&p->context,
+      kcontext_prepare(&p->context,
                             MMIX_PROCESS_CONTEXT_SLOT((uint)(p - proc)), entry);
       return p;
     }

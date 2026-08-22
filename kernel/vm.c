@@ -1009,5 +1009,5 @@ kvminithart(void)
     panic("paging enable");
 
   kernel_pagetable_live_audit();
-  mmix_diagnostic_paging(kernel_pagetable->rv);
+  diagnostic_paging(kernel_pagetable->rv);
 }

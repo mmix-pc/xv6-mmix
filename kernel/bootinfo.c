@@ -78,7 +78,7 @@ valid_devices(const struct mmix_bootinfo *info)
 }
 
 int
-mmix_bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
+bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
                      struct mmix_bootinfo *decoded)
 {
   const volatile uint8 *wire;

@@ -85,7 +85,7 @@ context_map_page(uint64 va, uint64 *saved_pa)
 }
 
 void
-mmix_kcontext_init(void)
+kcontext_init(void)
 {
   uint64 free_before = kalloc_free_pages();
   uint64 free_after;
@@ -129,7 +129,7 @@ mmix_kcontext_init(void)
 }
 
 void
-mmix_kcontext_prepare(struct context *context, uint slot, void (*entry)(void))
+kcontext_prepare(struct context *context, uint slot, void (*entry)(void))
 {
   struct mmix_initial_context *initial;
   uint64 register_base;
