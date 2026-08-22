@@ -44,7 +44,7 @@ QEMU = qemu-system-mmix
 HOSTCC ?= cc
 HOSTCFLAGS ?= -Wall -Werror -O2
 
-CFLAGS = -Wall -Werror -Wno-unknown-attributes -O0 -fno-omit-frame-pointer
+CFLAGS = -Wall -Werror -Wno-unknown-attributes -O2 -fno-omit-frame-pointer
 CFLAGS += --target=mmix
 CFLAGS += -std=gnu99
 CFLAGS += -MD

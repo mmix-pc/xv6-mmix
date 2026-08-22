@@ -165,9 +165,8 @@
 #define MMIX_TRAP_STATE_SIZE        352
 #define MMIX_TRAP_STATE_ALIGN       8
 
-// The linked -O0 entry and deepest terminal diagnostic use less than 640
-// bytes together. Keep one KiB available and re-audit this reserve whenever
-// the compiler options or diagnostic call graph changes.
+// Keep one KiB available for trap entry and terminal diagnostics. Re-audit
+// this reserve whenever the compiler options or diagnostic call graph changes.
 #define MMIX_TRAP_STACK_RESERVE 1024
 
 #define MMIX_TRAP_VECTOR_ALIGN 16

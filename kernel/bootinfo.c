@@ -156,7 +156,7 @@ bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
   if (!valid_devices(&info))
     return MMIX_BOOTINFO_BAD_DEVICE;
 
-  // At -O0, a structure assignment may require unavailable memcpy.
+  // Keep this copy independent of compiler-generated freestanding memcpy.
   decoded->cpu_count = info.cpu_count;
   decoded->boot_cpu_id = info.boot_cpu_id;
   decoded->ram_base = info.ram_base;
