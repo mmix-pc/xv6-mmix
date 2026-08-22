@@ -463,17 +463,17 @@ kfork(void)
   struct proc *child;
   int pid;
 
-  if (parent == 0 || parent->cwd != 0)
+  if (parent == 0)
     return -1;
-  // FIXME: duplicate descriptor and cwd references when filesystem-backed
-  // user processes are enabled.
-  for (int fd = 0; fd < NOFILE; fd++)
-    if (parent->ofile[fd] != 0)
-      return -1;
 
   child = proc_user_clone(parent, proc_user_entry);
   if (child == 0)
     return -1;
+  for (int fd = 0; fd < NOFILE; fd++)
+    if (parent->ofile[fd] != 0)
+      child->ofile[fd] = filedup(parent->ofile[fd]);
+  if (parent->cwd != 0)
+    child->cwd = idup(parent->cwd);
   pid = child->pid;
   release(&child->lock);
 
@@ -648,13 +648,20 @@ kexit(int status)
 
   if (p == 0)
     panic("exit proc");
-  // FIXME: replace these invariants with descriptor and cwd teardown before
-  // filesystem-backed process creation is enabled.
-  if (p->cwd != 0)
-    panic("exit cwd");
-  for (int fd = 0; fd < NOFILE; fd++)
-    if (p->ofile[fd] != 0)
-      panic("exit file");
+  for (int fd = 0; fd < NOFILE; fd++) {
+    if (p->ofile[fd] != 0) {
+      struct file *f = p->ofile[fd];
+
+      p->ofile[fd] = 0;
+      fileclose(f);
+    }
+  }
+  if (p->cwd != 0) {
+    begin_op();
+    iput(p->cwd);
+    end_op();
+    p->cwd = 0;
+  }
 
   acquire(&wait_lock);
   reparent(p);

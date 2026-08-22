@@ -15,6 +15,8 @@ OBJS = \
   $K/proc.o \
   $K/syscall.o \
   $K/sysproc.o \
+  $K/sysfile.o \
+  $K/exec.o \
   $K/early_selftest.o \
   $K/intc.o \
   $K/timer.o \

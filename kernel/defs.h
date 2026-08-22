@@ -1,6 +1,7 @@
 // clang-format off
 struct buf;
 struct context;
+struct dirent;
 struct file;
 struct inode;
 struct pipe;
@@ -39,6 +40,8 @@ int             filewrite(struct file*, uint64, int n);
 void            fsinit(int);
 int             dirlink(struct inode*, char*, uint);
 struct inode*   dirlookup(struct inode*, char*, uint*);
+int             dirread(struct inode*, uint, struct dirent*);
+int             dirwrite(struct inode*, uint, const struct dirent*);
 struct inode*   ialloc(uint, short);
 struct inode*   idup(struct inode*);
 void            iinit();

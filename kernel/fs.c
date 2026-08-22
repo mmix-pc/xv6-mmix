@@ -668,6 +668,38 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 
 // Directories
 
+// Decode one directory entry at the file-system format boundary.
+int
+dirread(struct inode *dp, uint off, struct dirent *de)
+{
+  uchar storage[XV6FS_DIRENT_BYTES];
+
+  if (dp == 0 || de == 0 || dp->type != T_DIR ||
+      off % XV6FS_DIRENT_BYTES != 0 || off > dp->size ||
+      readi(dp, 0, (uint64)storage, off, sizeof(storage)) != sizeof(storage))
+    return -1;
+  xv6fs_dirent_decode(de, storage);
+  if (de->inum >= sb.ninodes)
+    panic("invalid directory inode");
+  return 0;
+}
+
+// Encode one directory entry at the file-system format boundary.
+int
+dirwrite(struct inode *dp, uint off, const struct dirent *de)
+{
+  uchar storage[XV6FS_DIRENT_BYTES];
+
+  if (dp == 0 || de == 0 || dp->type != T_DIR ||
+      off % XV6FS_DIRENT_BYTES != 0 || de->inum >= sb.ninodes)
+    return -1;
+  xv6fs_dirent_encode(storage, de);
+  return writei(dp, 0, (uint64)storage, off, sizeof(storage)) ==
+           sizeof(storage)
+           ? 0
+           : -1;
+}
+
 int
 namecmp(const char *s, const char *t)
 {
@@ -681,20 +713,15 @@ dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
   struct dirent de;
-  uchar storage[XV6FS_DIRENT_BYTES];
 
   if (dp->type != T_DIR)
     panic("dirlookup not DIR");
 
   for (off = 0; off < dp->size; off += sizeof(de)) {
-    if (readi(dp, 0, (uint64)storage, off, sizeof(storage)) !=
-        sizeof(storage))
+    if (dirread(dp, off, &de) < 0)
       panic("dirlookup read");
-    xv6fs_dirent_decode(&de, storage);
     if (de.inum == 0)
       continue;
-    if (de.inum >= sb.ninodes)
-      panic("invalid directory inode");
     if (namecmp(name, de.name) == 0) {
       // entry matches path element
       if (poff)
@@ -714,7 +741,6 @@ dirlink(struct inode *dp, char *name, uint inum)
 {
   int off;
   struct dirent de;
-  uchar storage[XV6FS_DIRENT_BYTES];
   struct inode *ip;
 
   // Check that name is not present.
@@ -725,10 +751,8 @@ dirlink(struct inode *dp, char *name, uint inum)
 
   // Look for an empty dirent.
   for (off = 0; off < dp->size; off += sizeof(de)) {
-    if (readi(dp, 0, (uint64)storage, off, sizeof(storage)) !=
-        sizeof(storage))
+    if (dirread(dp, off, &de) < 0)
       panic("dirlink read");
-    xv6fs_dirent_decode(&de, storage);
     if (de.inum == 0)
       break;
   }
@@ -737,8 +761,7 @@ dirlink(struct inode *dp, char *name, uint inum)
   if (inum == 0 || inum >= sb.ninodes)
     panic("invalid directory link");
   de.inum = inum;
-  xv6fs_dirent_encode(storage, &de);
-  if (writei(dp, 0, (uint64)storage, off, sizeof(storage)) != sizeof(storage))
+  if (dirwrite(dp, off, &de) < 0)
     return -1;
 
   return 0;

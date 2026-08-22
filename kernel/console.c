@@ -54,10 +54,6 @@ struct {
   uint e; // Edit index
 } cons;
 
-// FIXME: Move this table back to file.c when that module joins the production
-// link. Device drivers publish their file-operation entry points here.
-struct devsw devsw[NDEV];
-
 //
 // user write() system calls to the console go here.
 // uses sleep() and UART interrupts.

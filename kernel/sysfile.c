@@ -5,7 +5,7 @@
 //
 
 #include "types.h"
-#include "riscv.h"
+#include "mmix.h"
 #include "defs.h"
 #include "param.h"
 #include "stat.h"
@@ -74,7 +74,7 @@ sys_read(void)
 
   argaddr(1, &p);
   argint(2, &n);
-  if (argfd(0, 0, &f) < 0)
+  if (n < 0 || argfd(0, 0, &f) < 0)
     return -1;
   return fileread(f, p, n);
 }
@@ -88,7 +88,7 @@ sys_write(void)
 
   argaddr(1, &p);
   argint(2, &n);
-  if (argfd(0, 0, &f) < 0)
+  if (n < 0 || argfd(0, 0, &f) < 0)
     return -1;
 
   return filewrite(f, p, n);
@@ -177,7 +177,7 @@ isdirempty(struct inode *dp)
   struct dirent de;
 
   for (off = 2 * sizeof(de); off < dp->size; off += sizeof(de)) {
-    if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+    if (dirread(dp, off, &de) < 0)
       panic("isdirempty: readi");
     if (de.inum != 0)
       return 0;
@@ -220,7 +220,7 @@ sys_unlink(void)
   }
 
   memset(&de, 0, sizeof(de));
-  if (writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+  if (dirwrite(dp, off, &de) < 0)
     panic("unlink: writei");
   if (ip->type == T_DIR) {
     dp->nlink--;
@@ -393,9 +393,11 @@ sys_mknod(void)
   char path[MAXPATH];
   int major, minor;
 
-  begin_op();
   argint(1, &major);
   argint(2, &minor);
+  if (major < 0 || major >= NDEV || minor < 0 || minor > 0x7fff)
+    return -1;
+  begin_op();
   if ((argstr(0, path, MAXPATH)) < 0 ||
       (ip = create(path, T_DEVICE, major, minor)) == 0) {
     end_op();
@@ -447,7 +449,8 @@ sys_exec(void)
     if (i >= NELEM(argv)) {
       goto bad;
     }
-    if (fetchaddr(uargv + sizeof(uint64) * i, (uint64 *)&uarg) < 0) {
+    if (uargv > ~(uint64)0 - sizeof(uint64) * i ||
+        fetchaddr(uargv + sizeof(uint64) * i, (uint64 *)&uarg) < 0) {
       goto bad;
     }
     if (uarg == 0) {
