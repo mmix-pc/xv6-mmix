@@ -174,6 +174,37 @@ proc_start(struct proc *p)
   release(&p->lock);
 }
 
+// Log recovery may sleep for VirtIO, so run it from a scheduler-owned process.
+static void
+proc_fsinit_entry(void)
+{
+  struct proc *p = myproc();
+
+  if (p == 0 || !holding(&p->lock) || p->state != RUNNING)
+    panic("fsinit process entry");
+  release(&p->lock);
+  fsinit(ROOTDEV);
+
+  acquire(&p->lock);
+  if (p->state != RUNNING || p->chan != 0 || !proc_user_state_empty(p))
+    panic("fsinit process exit");
+  proc_clear(p, 0);
+  p->state = UNUSED;
+  sched();
+  panic("fsinit process returned");
+}
+
+void
+proc_fsinit_start(void)
+{
+  struct proc *p = proc_alloc(proc_fsinit_entry);
+
+  if (p == 0)
+    panic("fsinit process alloc");
+  safestrcpy(p->name, "fsinit", sizeof(p->name));
+  proc_start(p);
+}
+
 // Release a process slot after its caller has freed all attached resources.
 static void
 proc_release(struct proc *p)

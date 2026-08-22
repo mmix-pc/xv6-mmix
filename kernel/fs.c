@@ -10,7 +10,7 @@
 // are in sysfile.c.
 
 #include "types.h"
-#include "riscv.h"
+#include "mmix.h"
 #include "defs.h"
 #include "param.h"
 #include "stat.h"
@@ -18,6 +18,7 @@
 #include "proc.h"
 #include "sleeplock.h"
 #include "fs.h"
+#include "fsdisk.h"
 #include "buf.h"
 #include "file.h"
 
@@ -26,6 +27,108 @@
 // only one device
 struct superblock sb;
 
+enum {
+  XV6FS_DISK_NINODES = 200,
+  XV6FS_BOOT_BLOCKS = 1,
+  XV6FS_SUPER_BLOCKS = 1,
+};
+
+static uint
+fs_data_start(void)
+{
+  return sb.bmapstart + (sb.size + BPB - 1) / BPB;
+}
+
+static int
+fs_data_block_valid(uint block)
+{
+  return block >= fs_data_start() && block < sb.size;
+}
+
+static void
+validate_superblock(struct superblock *candidate)
+{
+  uint inodeblocks;
+  uint bitmapblocks;
+  uint datastart;
+
+  if (candidate->magic != FSMAGIC || candidate->size != FSSIZE ||
+      candidate->ninodes != XV6FS_DISK_NINODES ||
+      candidate->nlog != LOGBLOCKS + 1 ||
+      candidate->logstart != XV6FS_BOOT_BLOCKS + XV6FS_SUPER_BLOCKS)
+    panic("invalid superblock");
+  inodeblocks = (candidate->ninodes + IPB - 1) / IPB;
+  bitmapblocks = (candidate->size + BPB - 1) / BPB;
+  if (candidate->inodestart != candidate->logstart + candidate->nlog ||
+      candidate->bmapstart != candidate->inodestart + inodeblocks)
+    panic("invalid superblock layout");
+  datastart = candidate->bmapstart + bitmapblocks;
+  if (datastart >= candidate->size ||
+      candidate->nblocks != candidate->size - datastart)
+    panic("invalid superblock size");
+}
+
+static void
+validate_dinode(struct dinode *dip)
+{
+  if (dip->type < 0 || dip->type > T_DEVICE || dip->major < 0 ||
+      dip->minor < 0 || dip->nlink < 0 || dip->size > MAXFILE * BSIZE)
+    panic("invalid dinode");
+  if (dip->type == T_DEVICE && dip->major >= NDEV)
+    panic("invalid device inode");
+  for (uint i = 0; i < NDIRECT + 1; i++)
+    if (dip->addrs[i] != 0 && !fs_data_block_valid(dip->addrs[i]))
+      panic("invalid inode block");
+  if (dip->type == T_DIR && dip->size % XV6FS_DIRENT_BYTES != 0)
+    panic("invalid directory size");
+}
+
+static void
+dinode_decode(struct dinode *dip, struct buf *bp, uint inum)
+{
+  uchar *storage;
+
+  if (inum >= sb.ninodes)
+    panic("invalid inode number");
+  storage = bp->data + (inum % IPB) * XV6FS_DINODE_BYTES;
+  xv6fs_dinode_decode(dip, storage);
+  validate_dinode(dip);
+}
+
+static void
+dinode_encode(struct buf *bp, uint inum, struct dinode *dip)
+{
+  uchar *storage;
+
+  if (inum >= sb.ninodes)
+    panic("invalid inode number");
+  validate_dinode(dip);
+  storage = bp->data + (inum % IPB) * XV6FS_DINODE_BYTES;
+  memset(storage, 0, XV6FS_DINODE_BYTES);
+  xv6fs_dinode_encode(storage, dip);
+}
+
+static uint
+indirect_decode(struct buf *bp, uint index)
+{
+  uint block;
+
+  if (index >= NINDIRECT)
+    panic("invalid indirect index");
+  block = xv6fs_load_le32(bp->data + index * sizeof(uint));
+  if (block != 0 && !fs_data_block_valid(block))
+    panic("invalid indirect block");
+  return block;
+}
+
+static void
+indirect_encode(struct buf *bp, uint index, uint block)
+{
+  if (index >= NINDIRECT || (block != 0 && !fs_data_block_valid(block)))
+    panic("invalid indirect update");
+  xv6fs_store_le32(bp->data + index * sizeof(uint), block);
+}
+
 // Read the super block.
 static void
 readsb(int dev, struct superblock *sb)
@@ -33,8 +136,9 @@ readsb(int dev, struct superblock *sb)
   struct buf *bp;
 
   bp = bread(dev, 1);
-  memmove(sb, bp->data, sizeof(*sb));
+  xv6fs_super_decode(sb, bp->data);
   brelse(bp);
+  validate_superblock(sb);
 }
 
 // Init fs
@@ -42,8 +146,6 @@ void
 fsinit(int dev)
 {
   readsb(dev, &sb);
-  if (sb.magic != FSMAGIC)
-    panic("invalid file system");
   initlog(dev, &sb);
   ireclaim(dev);
 }
@@ -202,14 +304,15 @@ ialloc(uint dev, short type)
 {
   int inum;
   struct buf *bp;
-  struct dinode *dip;
+  struct dinode dinode;
 
   for (inum = 1; inum < sb.ninodes; inum++) {
     bp = bread(dev, IBLOCK(inum, sb));
-    dip = (struct dinode *)bp->data + inum % IPB;
-    if (dip->type == 0) { // a free inode
-      memset(dip, 0, sizeof(*dip));
-      dip->type = type;
+    dinode_decode(&dinode, bp, inum);
+    if (dinode.type == 0) { // a free inode
+      memset(&dinode, 0, sizeof(dinode));
+      dinode.type = type;
+      dinode_encode(bp, inum, &dinode);
       log_write(bp); // mark it allocated on the disk
       brelse(bp);
       return iget(dev, inum);
@@ -228,16 +331,16 @@ void
 iupdate(struct inode *ip)
 {
   struct buf *bp;
-  struct dinode *dip;
+  struct dinode dinode;
 
   bp = bread(ip->dev, IBLOCK(ip->inum, sb));
-  dip = (struct dinode *)bp->data + ip->inum % IPB;
-  dip->type = ip->type;
-  dip->major = ip->major;
-  dip->minor = ip->minor;
-  dip->nlink = ip->nlink;
-  dip->size = ip->size;
-  memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
+  dinode.type = ip->type;
+  dinode.major = ip->major;
+  dinode.minor = ip->minor;
+  dinode.nlink = ip->nlink;
+  dinode.size = ip->size;
+  memmove(dinode.addrs, ip->addrs, sizeof(ip->addrs));
+  dinode_encode(bp, ip->inum, &dinode);
   log_write(bp);
   brelse(bp);
 }
@@ -295,7 +398,7 @@ void
 ilock(struct inode *ip)
 {
   struct buf *bp;
-  struct dinode *dip;
+  struct dinode dinode;
 
   if (ip == 0 || ip->ref < 1)
     panic("ilock");
@@ -304,13 +407,13 @@ ilock(struct inode *ip)
 
   if (ip->valid == 0) {
     bp = bread(ip->dev, IBLOCK(ip->inum, sb));
-    dip = (struct dinode *)bp->data + ip->inum % IPB;
-    ip->type = dip->type;
-    ip->major = dip->major;
-    ip->minor = dip->minor;
-    ip->nlink = dip->nlink;
-    ip->size = dip->size;
-    memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
+    dinode_decode(&dinode, bp, ip->inum);
+    ip->type = dinode.type;
+    ip->major = dinode.major;
+    ip->minor = dinode.minor;
+    ip->nlink = dinode.nlink;
+    ip->size = dinode.size;
+    memmove(ip->addrs, dinode.addrs, sizeof(ip->addrs));
     brelse(bp);
     ip->valid = 1;
     if (ip->type == 0)
@@ -377,8 +480,10 @@ ireclaim(int dev)
   for (int inum = 1; inum < sb.ninodes; inum++) {
     struct inode *ip = 0;
     struct buf *bp = bread(dev, IBLOCK(inum, sb));
-    struct dinode *dip = (struct dinode *)bp->data + inum % IPB;
-    if (dip->type != 0 && dip->nlink == 0) { // is an orphaned inode
+    struct dinode dinode;
+
+    dinode_decode(&dinode, bp, inum);
+    if (dinode.type != 0 && dinode.nlink == 0) { // is an orphaned inode
       printk("ireclaim: orphaned inode %d\n", inum);
       ip = iget(dev, inum);
     }
@@ -406,7 +511,7 @@ ireclaim(int dev)
 static uint
 bmap(struct inode *ip, uint bn)
 {
-  uint addr, *a;
+  uint addr;
   struct buf *bp;
 
   if (bn < NDIRECT) {
@@ -429,11 +534,10 @@ bmap(struct inode *ip, uint bn)
       ip->addrs[NDIRECT] = addr;
     }
     bp = bread(ip->dev, addr);
-    a = (uint *)bp->data;
-    if ((addr = a[bn]) == 0) {
+    if ((addr = indirect_decode(bp, bn)) == 0) {
       addr = balloc(ip->dev);
       if (addr) {
-        a[bn] = addr;
+        indirect_encode(bp, bn, addr);
         log_write(bp);
       }
     }
@@ -451,7 +555,6 @@ itrunc(struct inode *ip)
 {
   int i, j;
   struct buf *bp;
-  uint *a;
 
   for (i = 0; i < NDIRECT; i++) {
     if (ip->addrs[i]) {
@@ -462,10 +565,11 @@ itrunc(struct inode *ip)
 
   if (ip->addrs[NDIRECT]) {
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
-    a = (uint *)bp->data;
     for (j = 0; j < NINDIRECT; j++) {
-      if (a[j])
-        bfree(ip->dev, a[j]);
+      uint block = indirect_decode(bp, j);
+
+      if (block)
+        bfree(ip->dev, block);
     }
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
@@ -577,15 +681,20 @@ dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
   struct dirent de;
+  uchar storage[XV6FS_DIRENT_BYTES];
 
   if (dp->type != T_DIR)
     panic("dirlookup not DIR");
 
   for (off = 0; off < dp->size; off += sizeof(de)) {
-    if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+    if (readi(dp, 0, (uint64)storage, off, sizeof(storage)) !=
+        sizeof(storage))
       panic("dirlookup read");
+    xv6fs_dirent_decode(&de, storage);
     if (de.inum == 0)
       continue;
+    if (de.inum >= sb.ninodes)
+      panic("invalid directory inode");
     if (namecmp(name, de.name) == 0) {
       // entry matches path element
       if (poff)
@@ -605,6 +714,7 @@ dirlink(struct inode *dp, char *name, uint inum)
 {
   int off;
   struct dirent de;
+  uchar storage[XV6FS_DIRENT_BYTES];
   struct inode *ip;
 
   // Check that name is not present.
@@ -615,15 +725,20 @@ dirlink(struct inode *dp, char *name, uint inum)
 
   // Look for an empty dirent.
   for (off = 0; off < dp->size; off += sizeof(de)) {
-    if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+    if (readi(dp, 0, (uint64)storage, off, sizeof(storage)) !=
+        sizeof(storage))
       panic("dirlink read");
+    xv6fs_dirent_decode(&de, storage);
     if (de.inum == 0)
       break;
   }
 
   strncpy(de.name, name, DIRSIZ);
+  if (inum == 0 || inum >= sb.ninodes)
+    panic("invalid directory link");
   de.inum = inum;
-  if (writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+  xv6fs_dirent_encode(storage, &de);
+  if (writei(dp, 0, (uint64)storage, off, sizeof(storage)) != sizeof(storage))
     return -1;
 
   return 0;

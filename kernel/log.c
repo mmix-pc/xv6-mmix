@@ -1,10 +1,11 @@
 #include "types.h"
-#include "riscv.h"
+#include "mmix.h"
 #include "defs.h"
 #include "param.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "fs.h"
+#include "fsdisk.h"
 #include "buf.h"
 
 // Simple logging that allows concurrent FS system calls.
@@ -43,6 +44,8 @@ struct log {
   int outstanding; // how many FS sys calls are executing.
   int committing;  // in commit(), please wait.
   int dev;
+  int size;
+  int nlog;
   int ncommit;
   struct logheader lh;
 };
@@ -54,13 +57,22 @@ static void commit();
 void
 initlog(int dev, struct superblock *sb)
 {
-  if (sizeof(struct logheader) >= BSIZE)
-    panic("initlog: too big logheader");
+  if (sizeof(struct logheader) >= BSIZE || sb->nlog != LOGBLOCKS + 1 ||
+      sb->logstart >= sb->size || sb->nlog > sb->size - sb->logstart)
+    panic("invalid log layout");
 
   initlock(&log.lock, "log");
   log.start = sb->logstart;
   log.dev = dev;
+  log.size = sb->size;
+  log.nlog = sb->nlog;
   recover_from_log();
+}
+
+static int
+log_home_block_valid(int block)
+{
+  return block >= log.start + log.nlog && block < log.size;
 }
 
 // Copy committed blocks from log to their home location
@@ -70,6 +82,8 @@ install_trans(int recovering)
   int tail;
 
   for (tail = 0; tail < log.lh.n; tail++) {
+    if (!log_home_block_valid(log.lh.block[tail]))
+      panic("invalid log destination");
     if (recovering) {
       printk("recovering tail %d dst %d\n", tail, log.lh.block[tail]);
     }
@@ -89,12 +103,24 @@ static void
 read_head(void)
 {
   struct buf *buf = bread(log.dev, log.start);
-  struct logheader *lh = (struct logheader *)(buf->data);
-  int i;
-  log.lh.n = lh->n;
-  for (i = 0; i < log.lh.n; i++) {
-    log.lh.block[i] = lh->block[i];
+  struct logheader next;
+  uint count = xv6fs_load_le32(buf->data);
+
+  memset(&next, 0, sizeof(next));
+  if (count > LOGBLOCKS || count > (uint)(log.nlog - 1))
+    panic("invalid log count");
+  next.n = count;
+  for (uint i = 0; i < count; i++) {
+    uint block = xv6fs_load_le32(buf->data + (i + 1) * sizeof(uint));
+
+    if (block > 0x7fffffffU || !log_home_block_valid((int)block))
+      panic("invalid log block");
+    for (uint previous = 0; previous < i; previous++)
+      if (next.block[previous] == (int)block)
+        panic("duplicate log block");
+    next.block[i] = block;
   }
+  log.lh = next;
   brelse(buf);
 }
 
@@ -105,11 +131,16 @@ static void
 write_head(void)
 {
   struct buf *buf = bread(log.dev, log.start);
-  struct logheader *hb = (struct logheader *)(buf->data);
-  int i;
-  hb->n = log.lh.n;
-  for (i = 0; i < log.lh.n; i++) {
-    hb->block[i] = log.lh.block[i];
+
+  if (log.lh.n < 0 || log.lh.n > LOGBLOCKS || log.lh.n >= log.nlog)
+    panic("invalid log write count");
+  memset(buf->data, 0, BSIZE);
+  xv6fs_store_le32(buf->data, log.lh.n);
+  for (int i = 0; i < log.lh.n; i++) {
+    if (!log_home_block_valid(log.lh.block[i]))
+      panic("invalid log write block");
+    xv6fs_store_le32(buf->data + (i + 1) * sizeof(uint),
+                     log.lh.block[i]);
   }
   bwrite(buf);
   brelse(buf);
@@ -224,6 +255,8 @@ log_write(struct buf *b)
     panic("too big a transaction");
   if (log.outstanding < 1)
     panic("log_write outside of trans");
+  if (b->dev != (uint)log.dev || !log_home_block_valid(b->blockno))
+    panic("invalid log buffer");
 
   for (i = 0; i < log.lh.n; i++) {
     if (log.lh.block[i] == b->blockno) // log absorption

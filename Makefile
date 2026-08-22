@@ -20,11 +20,17 @@ OBJS = \
   $K/timer.o \
   $K/kalloc.o \
   $K/spinlock.o \
+  $K/sleeplock.o \
   $K/string.o \
   $K/console.o \
   $K/printk.o \
   $K/uart.o \
   $K/virtio_disk.o \
+  $K/bio.o \
+  $K/fs.o \
+  $K/log.o \
+  $K/file.o \
+  $K/pipe.o \
   $K/vm.o \
   $K/diagnostic.o
 
