@@ -69,6 +69,11 @@
 // Bootstrap physical layout within Low RAM.
 #define MMIX_PAGE_SIZE 0x0000000000002000
 
+// The alignment must be a power of two.
+#define ROUNDUP(value, alignment)                                             \
+  (((value) + (alignment) - 1) & ~((alignment) - 1))
+#define ROUNDDOWN(value, alignment) ((value) & ~((alignment) - 1))
+
 // Reserve the first physical page for MMIX's fixed low TRIP vectors. The
 // kernel does not map the corresponding virtual page until TRIP support exists.
 #define MMIX_LOW_VECTOR_BASE LOW_RAM_BASE
@@ -150,11 +155,7 @@
   ((MMIX_USER_REGISTER_STACK_TOP - MMIX_USER_REGISTER_STACK_BASE) /       \
    MMIX_PAGE_SIZE)
 
-// FIXME: kernel.ld provides a page-aligned kernel_end. Keep this macro as an
-// identity operation for now: the MMIX code generator otherwise folds the
-// usual round-up addition into an unaligned GETA symbol addend that the linker
-// cannot encode.
-#define KALLOC_START(kernel_end) (kernel_end)
+#define KALLOC_START(kernel_end) ROUNDUP(kernel_end, MMIX_PAGE_SIZE)
 #define KALLOC_LIMIT BOOT_STACK_BASE
 
 #if !defined(__ASSEMBLER__)

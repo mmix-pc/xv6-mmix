@@ -6,8 +6,8 @@
 // xv6 page interface.
 #define PGSIZE             MMIX_PAGE_SIZE
 #define PGSHIFT            13
-#define PGROUNDUP(value)   (((value) + PGSIZE - 1) & ~(PGSIZE - 1))
-#define PGROUNDDOWN(value) ((value) & ~(PGSIZE - 1))
+#define PGROUNDUP(value)   ROUNDUP(value, PGSIZE)
+#define PGROUNDDOWN(value) ROUNDDOWN(value, PGSIZE)
 
 // MMIX leaf permissions are pr:pw:px in bits 2:0. There is no valid or user
 // bit; an entry without the permission required by an access faults.
