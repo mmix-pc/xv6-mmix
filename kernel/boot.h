@@ -14,7 +14,7 @@ struct mmix_boot_state {
 
 extern struct mmix_boot_state mmix_boot;
 
-void mmix_start(uint64 startup_cpu_id, uint64 bootinfo_pa)
+void start(uint64 startup_cpu_id, uint64 bootinfo_pa)
     __attribute__((noreturn));
 
 #endif

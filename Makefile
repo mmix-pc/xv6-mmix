@@ -7,6 +7,7 @@ OBJS = \
   $K/trampoline.o \
   $K/specialreg.o \
   $K/start.o \
+  $K/main.o \
   $K/trap.o \
   $K/bootinfo.o \
   $K/cpu.o \
@@ -17,7 +18,6 @@ OBJS = \
   $K/sysproc.o \
   $K/sysfile.o \
   $K/exec.o \
-  $K/early_selftest.o \
   $K/intc.o \
   $K/timer.o \
   $K/kalloc.o \

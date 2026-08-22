@@ -19,7 +19,7 @@ _entry:
 
         // PUSHJ uses $31 as the call hole and passes the preserved QEMU values
         // to the C boot boundary in $231 and $232.
-        PUSHJ r31, mmix_start
+        PUSHJ r31, start
 
 .Lwait:
         JMP .Lwait
