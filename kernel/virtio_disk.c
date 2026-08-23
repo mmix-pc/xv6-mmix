@@ -189,7 +189,7 @@ virtio_dma_page_address(void *page)
 {
   uint64 address = (uint64)page;
 
-  if (!kalloc_page_is_managed(page) || (address & (PGSIZE - 1)) != 0 ||
+  if (!kalloc_page_is_dma(page) || (address & (PGSIZE - 1)) != 0 ||
       (address & MMIX_PHYSICAL_ALIAS_BIT) != 0 || address >= LOW_RAM_END)
     virtio_fail("virtio dma page");
   return address;
@@ -283,15 +283,15 @@ virtio_release_pages(void)
 static int
 virtio_allocate_pages(void)
 {
-  disk.desc = kalloc();
-  disk.avail = kalloc();
-  disk.used = kalloc();
+  disk.desc = kalloc_dma();
+  disk.avail = kalloc_dma();
+  disk.used = kalloc_dma();
   if (disk.desc == 0 || disk.avail == 0 || disk.used == 0) {
     virtio_release_pages();
     return -1;
   }
   for (uint i = 0; i < NUM; i++) {
-    disk.data[i] = kalloc();
+    disk.data[i] = kalloc_dma();
     if (disk.data[i] == 0) {
       virtio_release_pages();
       return -1;

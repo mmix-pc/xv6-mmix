@@ -3,7 +3,9 @@
 #include "memlayout.h"
 #include "mmix.h"
 #include "defs.h"
+#include "boot.h"
 #include "intc.h"
+#include "kalloc.h"
 #include "kcontext.h"
 #include "timer.h"
 
@@ -13,9 +15,12 @@ void main(void) __attribute__((noreturn));
 void
 main(void)
 {
+  if (mmix_boot.bootinfo_status != MMIX_BOOTINFO_OK)
+    panic("bootinfo");
   kinit();            // physical page allocator
   kvminit();          // create kernel page table
   kvminithart();      // turn on paging
+  kinit_extended();   // add mapped RAM above the MMIO envelope
   kcontext_init();
   procinit();         // process table
   trapinit();         // trap vectors

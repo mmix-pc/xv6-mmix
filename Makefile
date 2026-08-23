@@ -76,6 +76,7 @@ $K/%.o: $K/%.S
 
 QEMUOPTS = -machine virt
 QEMUOPTS += -smp 1
+QEMUOPTS += -m 512M
 QEMUOPTS += -display none
 QEMUOPTS += -serial stdio
 QEMUOPTS += -monitor none

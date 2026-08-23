@@ -62,6 +62,14 @@
 #define INTC_SHARED_IRQ_LAST 15
 #define INTC_CONTEXT_COUNT 16
 
+// The kernel requires 512 MiB of machine RAM but deliberately manages no
+// memory beyond this fixed limit. The MMIO pages below EXTENDED_RAM_BASE
+// remain reserved even though QEMU exposes RAM underneath gaps between devices.
+#define RAM_REQUIRED_SIZE 0x0000000020000000
+#define RAM_MANAGED_END (LOW_RAM_BASE + RAM_REQUIRED_SIZE)
+#define EXTENDED_RAM_BASE (INTC_BASE + INTC_SIZE)
+#define EXTENDED_RAM_END RAM_MANAGED_END
+
 // The current kernel configuration is single-CPU.
 #define BOOT_CPU_COUNT 1
 #define BOOT_CPU_ID 0
@@ -156,7 +164,9 @@
    MMIX_PAGE_SIZE)
 
 #define KALLOC_START(kernel_end) ROUNDUP(kernel_end, MMIX_PAGE_SIZE)
-#define KALLOC_LIMIT BOOT_STACK_BASE
+#define KALLOC_LOW_LIMIT BOOT_STACK_BASE
+#define KALLOC_EXTENDED_START EXTENDED_RAM_BASE
+#define KALLOC_EXTENDED_LIMIT EXTENDED_RAM_END
 
 #if !defined(__ASSEMBLER__)
 _Static_assert((MMIX_PAGE_SIZE & (MMIX_PAGE_SIZE - 1)) == 0,
@@ -199,6 +209,14 @@ _Static_assert(FRAMEBUFFER_CONTROL_BASE + FRAMEBUFFER_CONTROL_SIZE <=
                "framebuffer control must not overlap the timer");
 _Static_assert(TIMER_BASE + TIMER_SIZE <= INTC_BASE,
                "timer MMIO range must not overlap the interrupt controller");
+_Static_assert(INTC_BASE + INTC_SIZE == EXTENDED_RAM_BASE,
+               "extended RAM must follow the MMIO envelope");
+_Static_assert((RAM_REQUIRED_SIZE & (MMIX_PAGE_SIZE - 1)) == 0 &&
+                   RAM_MANAGED_END == 0x0000000020000000,
+               "the kernel must manage exactly 512 MiB of machine RAM");
+_Static_assert((EXTENDED_RAM_BASE & (MMIX_PAGE_SIZE - 1)) == 0 &&
+                   EXTENDED_RAM_BASE < EXTENDED_RAM_END,
+               "extended RAM must be a non-empty page-aligned interval");
 
 _Static_assert((KERNEL_LOAD & (MMIX_PAGE_SIZE - 1)) == 0,
                "kernel load address must be page-aligned");
@@ -207,7 +225,8 @@ _Static_assert((REGISTER_STACK_BASE & 7) == 0 &&
                "register-stack backing range must be valid and octa-aligned");
 _Static_assert(KERNEL_LOAD == REGISTER_STACK_LIMIT,
                "kernel must follow the reserved register-stack range");
-_Static_assert(KERNEL_LIMIT == BOOT_STACK_BASE,
+_Static_assert(KERNEL_LIMIT == KALLOC_LOW_LIMIT &&
+                   KALLOC_LOW_LIMIT == BOOT_STACK_BASE,
                "kernel limit must stop at the bootstrap stack");
 _Static_assert(BOOT_STACK_SIZE == MMIX_PAGE_SIZE,
                "the kernel must reserve exactly one bootstrap stack page");
@@ -245,10 +264,13 @@ _Static_assert((MMIX_USER_REGISTER_STACK_BASE >> 61) == 3 &&
                  MMIX_USER_REGISTER_GUARD_TOP ==
                    MMIX_USER_REGISTER_STACK_TOP + MMIX_PAGE_SIZE,
                "user register-stack layout must match the user ABI");
-_Static_assert(KALLOC_LIMIT <= LOW_RAM_END,
-               "allocator limit must remain inside Low RAM");
-_Static_assert(KALLOC_START(KERNEL_LOAD) < KALLOC_LIMIT,
+_Static_assert(KALLOC_LOW_LIMIT <= LOW_RAM_END,
+               "Low allocator limit must remain inside Low RAM");
+_Static_assert(KALLOC_START(KERNEL_LOAD) < KALLOC_LOW_LIMIT,
                "bootstrap allocator range must be non-empty");
+_Static_assert(KALLOC_EXTENDED_START == EXTENDED_RAM_BASE &&
+                   KALLOC_EXTENDED_LIMIT == RAM_MANAGED_END,
+               "extended allocator range must match the managed RAM tail");
 #endif
 
 #endif
