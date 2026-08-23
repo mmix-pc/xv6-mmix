@@ -79,19 +79,20 @@
 #define MMIX_KERNEL_ROOT_BLOCKS (MMIX_KERNEL_B1 - MMIX_KERNEL_B0)
 #define MMIX_SEGMENT0_LIMIT     0x0000080000000000
 
-// User translation configuration. Segments 0 and 3 each have one radix-1024
-// digit; segments 1 and 2 are empty. The two root blocks are contiguous.
+// User translation configuration. Segment 0 has two radix-1024 digits and
+// covers 8 GiB sparsely. Segments 1 and 2 are empty; segment 3 has one digit
+// for the register stack. The three root blocks are contiguous.
 #define MMIX_USER_B0 0
-#define MMIX_USER_B1 1
-#define MMIX_USER_B2 1
-#define MMIX_USER_B3 1
-#define MMIX_USER_B4 2
+#define MMIX_USER_B1 2
+#define MMIX_USER_B2 2
+#define MMIX_USER_B3 2
+#define MMIX_USER_B4 3
 #define MMIX_USER_S  PGSHIFT
 #define MMIX_USER_F  MMIX_RV_F_HARDWARE
 #define MMIX_USER_ROOT_BLOCKS (MMIX_USER_B4 - MMIX_USER_B0)
 #define MMIX_USER_ASN_FIRST   1
 #define MMIX_USER_ASN_LAST    64
-#define MMIX_USER_RV_BASE     0x11120d0000000000
+#define MMIX_USER_RV_BASE     0x22230d0000000000
 
 // Kernel trap requests and masks. Program requests occupy rQ[39:32]; the
 // QEMU virt interrupt controller drives I/O request bit 8.
@@ -652,8 +653,11 @@ _Static_assert(MMIX_USER_RV_BASE ==
                  MMIX_RV_BUILD(MMIX_USER_B1, MMIX_USER_B2, MMIX_USER_B3,
                                MMIX_USER_B4, MMIX_USER_S, 0, 0, MMIX_USER_F),
                "user rV base must match its named fields");
-_Static_assert(MMIX_USER_ROOT_BLOCKS == 2,
-               "user rV must use two contiguous root blocks");
+_Static_assert(MMIX_USER_ROOT_BLOCKS == 3,
+               "user rV must use three contiguous root blocks");
+_Static_assert(MMIX_USER_SEGMENT0_LIMIT ==
+                 (1L << (PGSHIFT + MMIX_PT_INDEX_BITS * MMIX_USER_B1)),
+               "user segment-0 limit must match the configured table span");
 _Static_assert(MMIX_USER_ASN_FIRST > MMIX_KERNEL_N &&
                  MMIX_USER_ASN_LAST <= MMIX_RV_N_VALUE_MASK,
                "user address-space numbers must be valid and non-kernel");

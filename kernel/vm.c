@@ -44,6 +44,15 @@ table_address(uint64 pa)
 }
 
 static int
+managed_page_range(uint64 start, uint pages)
+{
+  for (uint page = 0; page < pages; page++)
+    if (!kalloc_page_is_managed((void *)(start + (uint64)page * PGSIZE)))
+      return 0;
+  return 1;
+}
+
+static int
 pagetable_valid(pagetable_t pagetable)
 {
   uint64 root_pa;
@@ -57,8 +66,7 @@ pagetable_valid(pagetable_t pagetable)
   root_pa = MMIX_RV_ROOT_PA(pagetable->rv);
   asn = MMIX_RV_N(pagetable->rv);
   return kalloc_page_is_managed(pagetable) &&
-         kalloc_page_is_managed((void *)root_pa) &&
-         kalloc_page_is_managed((void *)(root_pa + PGSIZE)) &&
+         managed_page_range(root_pa, MMIX_USER_ROOT_BLOCKS) &&
          asn >= MMIX_USER_ASN_FIRST && asn <= MMIX_USER_ASN_LAST &&
          pagetable->rv == mmix_user_rv_make(root_pa, asn);
 }

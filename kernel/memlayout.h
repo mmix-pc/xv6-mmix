@@ -1,7 +1,34 @@
 #ifndef XV6_MMIX_MEMLAYOUT_H
 #define XV6_MMIX_MEMLAYOUT_H
 
-// QEMU MMIX virt physical memory map. Intervals are half-open.
+// QEMU MMIX virt physical memory map. Intervals are half-open and the drawing
+// is not to scale.
+//
+//   0x0000000000000000 +----------------------------------+
+//                      | Low RAM (96 MiB)                 |
+//   0x0000000006000000 +----------------------------------+
+//                      | Pool Segment backing (8 MiB)     |
+//   0x0000000006800000 +----------------------------------+
+//                      | Data Segment backing (64 MiB)    |
+//   0x000000000a800000 +----------------------------------+
+//                      | Stack Segment backing (64 MiB)   |
+//   0x000000000e800000 +----------------------------------+
+//                      | Platform RAM (8 MiB; boot info)  |
+//   0x000000000f000000 +----------------------------------+
+//                      | Framebuffer backing (16 MiB)     |
+//   0x0000000010000000 +----------------------------------+
+//                      | UART MMIO and reserved gaps      |
+//   0x0000000010001000 +----------------------------------+
+//                      | VirtIO MMIO (4 KiB)              |
+//   0x0000000010002000 +----------------------------------+
+//                      | Framebuffer control (4 KiB)      |
+//   0x0000000010003000 +----------------------------------+
+//                      | Timer MMIO (4 KiB)               |
+//   0x0000000010004000 +----------------------------------+
+//                      | INTC MMIO (8 KiB)                |
+//   0x0000000010006000 +----------------------------------+
+//                      | Extended RAM                     |
+//   0x0000000020000000 +----------------------------------+ managed RAM end
 #define LOW_RAM_BASE 0x0000000000000000
 #define LOW_RAM_SIZE 0x0000000006000000
 #define LOW_RAM_END (LOW_RAM_BASE + LOW_RAM_SIZE)
@@ -74,7 +101,24 @@
 #define BOOT_CPU_COUNT 1
 #define BOOT_CPU_ID 0
 
-// Bootstrap physical layout within Low RAM.
+// Bootstrap physical layout within Low RAM. The kernel image ends before the
+// allocator begins; that boundary is supplied by the linker.
+//
+//   0x0000000000000000 +----------------------------------+
+//                      | Reserved low-vector page (8 KiB) |
+//   0x0000000000002000 +----------------------------------+
+//                      | Kernel root tables (24 KiB)      |
+//   0x0000000000008000 +----------------------------------+
+//                      | Reserved gap (32 KiB)            |
+//   0x0000000000010000 +----------------------------------+
+//                      | Bootstrap register stack         |
+//   0x0000000000100000 +----------------------------------+ KERNEL_LOAD
+//                      | Kernel image                     |
+//                      +----------------------------------+ KALLOC_START(end)
+//                      | Free pages below the boot stack  |
+//   0x0000000005ffe000 +----------------------------------+ KERNEL_LIMIT
+//                      | Bootstrap stack (8 KiB)          |
+//   0x0000000006000000 +----------------------------------+
 #define MMIX_PAGE_SIZE 0x0000000000002000
 
 // The alignment must be a power of two.
@@ -106,9 +150,30 @@
 #define BOOT_STACK_SIZE MMIX_PAGE_SIZE
 #define BOOT_STACK_TOP (BOOT_STACK_BASE + BOOT_STACK_SIZE)
 
-// Single-CPU kernel context window at the top of positive segment 0. Slot 0
-// belongs to the scheduler; slots 1 through 64 correspond to proc[0..63].
-// Each slot has two mapped pages separated and bounded by unmapped guards.
+// Kernel virtual address map. Identity ranges map a virtual address to the
+// same physical address. Negative addresses produced by mmix_phys_alias()
+// provide privileged direct aliases of physical memory.
+//
+//   0x0000000000000000 +----------------------------------+
+//                      | Unmapped low vectors/tables/gap  |
+//   0x0000000000010000 +----------------------------------+
+//                      | Identity Low RAM                 |
+//   0x0000000006000000 +----------------------------------+
+//                      | Unmapped reserved physical area  |
+//   0x0000000010000000 +----------------------------------+
+//                      | Identity MMIO and Extended RAM   |
+//   0x0000000020000000 +----------------------------------+
+//                      | Unmapped                         |
+//   0x000007ffffd76000 +----------------------------------+
+//                      | 65 kernel context slots          |
+//   0x0000080000000000 +----------------------------------+
+//                      | Unmapped                         |
+//   0x8000000000000000 +----------------------------------+
+//                      | Direct aliases of managed memory |
+//   0x8000000020000000 +----------------------------------+
+//
+// Slot 0 belongs to the scheduler; slots 1 through 64 correspond to
+// proc[0..63]. Each slot has two mapped pages separated and bounded by guards.
 #define MMIX_CONTEXT_AREA_TOP          0x0000080000000000
 #define MMIX_CONTEXT_SLOT_COUNT        65
 #define MMIX_CONTEXT_SCHEDULER_SLOT    0
@@ -143,15 +208,36 @@
 #define MMIX_PROCESS_REGISTER_STACK_LIMIT(index)                               \
   MMIX_CONTEXT_REGISTER_STACK_LIMIT(MMIX_PROCESS_CONTEXT_SLOT(index))
 
-// Per-process user virtual layout. Page zero contains the fixed MMIX TRIP
-// vectors and remains unmapped. The software and register stacks have
-// unmapped guards on both sides and never share kernel context pages.
+// Per-process user virtual address map. Image and heap pages are mapped on
+// demand; the empty address ranges shown here consume no physical memory. All
+// user addresses outside the ranges below remain unmapped.
+//
+// Segment 0:
+//   0x0000000000000000 +----------------------------------+
+//                      | Low guard page (unmapped)        |
+//   0x0000000000002000 +----------------------------------+
+//                      | Sparse image and heap            |
+//   0x00000001ffffc000 +----------------------------------+ heap limit
+//                      | Guard page (8 KiB, unmapped)     |
+//   0x00000001ffffe000 +----------------------------------+
+//                      | Software stack (8 KiB)           |
+//   0x0000000200000000 +----------------------------------+
+//
+// Segment 3 register-stack window:
+//   0x600000000000e000 +----------------------------------+
+//                      | Low guard page (unmapped)        |
+//   0x6000000000010000 +----------------------------------+
+//                      | Register stack (128 KiB)         |
+//   0x6000000000030000 +----------------------------------+
+//                      | High guard page (unmapped)       |
+//   0x6000000000032000 +----------------------------------+
 #define MMIX_USER_LOW_GUARD_BASE      0x0000000000000000
 #define MMIX_USER_IMAGE_BASE          0x0000000000002000
-#define MMIX_USER_HEAP_LIMIT          0x00000000007f6000
-#define MMIX_USER_STACK_GUARD_BASE    0x00000000007f6000
-#define MMIX_USER_STACK_BASE          0x00000000007f8000
-#define MMIX_USER_STACK_TOP           0x0000000000800000
+#define MMIX_USER_HEAP_LIMIT          0x00000001ffffc000
+#define MMIX_USER_STACK_GUARD_BASE    0x00000001ffffc000
+#define MMIX_USER_STACK_BASE          0x00000001ffffe000
+#define MMIX_USER_STACK_TOP           0x0000000200000000
+#define MMIX_USER_SEGMENT0_LIMIT      MMIX_USER_STACK_TOP
 #define MMIX_USER_REGISTER_GUARD_BASE 0x600000000000e000
 #define MMIX_USER_REGISTER_STACK_BASE 0x6000000000010000
 #define MMIX_USER_REGISTER_STACK_TOP  0x6000000000030000
@@ -252,11 +338,17 @@ _Static_assert(KSTACK(0) == 0x000007fffffee000 &&
                  KSTACK(63) == 0x000007ffffd78000,
                "process kernel-stack endpoints must match the scheduler ABI");
 _Static_assert(MMIX_USER_IMAGE_BASE == MMIX_PAGE_SIZE &&
+                 MMIX_USER_LOW_GUARD_BASE == 0 &&
                  MMIX_USER_HEAP_LIMIT == MMIX_USER_STACK_GUARD_BASE &&
                  MMIX_USER_STACK_BASE ==
                    MMIX_USER_STACK_GUARD_BASE + MMIX_PAGE_SIZE &&
-                 MMIX_USER_STACK_PAGES == 4,
+                 MMIX_USER_STACK_TOP == MMIX_USER_SEGMENT0_LIMIT &&
+                 MMIX_USER_STACK_PAGES == 1,
                "user segment-0 layout must match the user ABI");
+_Static_assert(((MMIX_USER_IMAGE_BASE | MMIX_USER_HEAP_LIMIT |
+                  MMIX_USER_STACK_BASE | MMIX_USER_STACK_TOP) &
+                 (MMIX_PAGE_SIZE - 1)) == 0,
+               "user segment-0 boundaries must be page-aligned");
 _Static_assert((MMIX_USER_REGISTER_STACK_BASE >> 61) == 3 &&
                  MMIX_USER_REGISTER_STACK_BASE ==
                    MMIX_USER_REGISTER_GUARD_BASE + MMIX_PAGE_SIZE &&
