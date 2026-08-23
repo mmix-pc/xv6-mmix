@@ -10,6 +10,11 @@
 #include "sleeplock.h"
 #include "file.h"
 
+_Static_assert(USERSTACK == MMIX_USER_STACK_PAGES,
+               "USERSTACK must match the MMIX software-stack layout");
+_Static_assert((MMIX_EXEC_ARG_MAX & (sizeof(uint64) - 1)) == 0,
+               "exec argument limit must preserve ABI stack alignment");
+
 static int
 read_exact(struct inode *ip, uint64 dst, uint64 offset, uint size)
 {
@@ -107,6 +112,7 @@ kexec(char *path, char **argv)
   struct proc *p = myproc();
   uint64 image_end = MMIX_USER_IMAGE_BASE;
   uint64 sp = MMIX_USER_STACK_TOP;
+  uint64 argbase = MMIX_USER_STACK_TOP - MMIX_EXEC_ARG_MAX;
   uint64 argv_address;
   uint argc;
   uint load_count = 0;
@@ -196,7 +202,7 @@ kexec(char *path, char **argv)
     if (argc == MAXARG)
       goto bad;
     length = strlen(argv[argc]) + 1;
-    if (length > sp - MMIX_USER_STACK_BASE)
+    if (length > sp - argbase)
       goto bad;
     sp = (sp - length) & ~(sizeof(uint64) - 1);
     if (copyout(pagetable, sp, argv[argc], length) < 0)
@@ -207,7 +213,7 @@ kexec(char *path, char **argv)
 
   // Push a copy of ustack[], the array of argv[] pointers.
   uint64 array_size = (argc + 1) * sizeof(uint64);
-  if (array_size > sp - MMIX_USER_STACK_BASE)
+  if (array_size > sp - argbase)
     goto bad;
   sp = (sp - array_size) & ~(sizeof(uint64) - 1);
   argv_address = sp;

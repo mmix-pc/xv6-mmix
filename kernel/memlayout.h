@@ -238,6 +238,8 @@
 #define MMIX_USER_STACK_BASE          0x00000001ffffe000
 #define MMIX_USER_STACK_TOP           0x0000000200000000
 #define MMIX_USER_SEGMENT0_LIMIT      MMIX_USER_STACK_TOP
+// Keep exec argument data bounded independently of runtime stack capacity.
+#define MMIX_EXEC_ARG_MAX             MMIX_PAGE_SIZE
 #define MMIX_USER_REGISTER_GUARD_BASE 0x600000000000e000
 #define MMIX_USER_REGISTER_STACK_BASE 0x6000000000010000
 #define MMIX_USER_REGISTER_STACK_TOP  0x6000000000030000
@@ -345,6 +347,9 @@ _Static_assert(MMIX_USER_IMAGE_BASE == MMIX_PAGE_SIZE &&
                  MMIX_USER_STACK_TOP == MMIX_USER_SEGMENT0_LIMIT &&
                  MMIX_USER_STACK_PAGES == 1,
                "user segment-0 layout must match the user ABI");
+_Static_assert(MMIX_EXEC_ARG_MAX <=
+                 MMIX_USER_STACK_PAGES * MMIX_PAGE_SIZE,
+               "exec arguments must fit in the user software stack");
 _Static_assert(((MMIX_USER_IMAGE_BASE | MMIX_USER_HEAP_LIMIT |
                   MMIX_USER_STACK_BASE | MMIX_USER_STACK_TOP) &
                  (MMIX_PAGE_SIZE - 1)) == 0,

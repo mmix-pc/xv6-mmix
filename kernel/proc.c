@@ -293,17 +293,19 @@ proc_user_context(pagetable_t pagetable, struct trapframe *trapframe,
                   uint64 entry, uint64 stack, uint64 argc, uint64 argv)
 {
   struct mmix_initial_user_context initial;
+  uint64 argbase = MMIX_USER_STACK_TOP - MMIX_EXEC_ARG_MAX;
   uint64 argv_size;
 
   if (pagetable == 0 || trapframe == 0 || entry < MMIX_USER_IMAGE_BASE ||
       !user_mapping_has(pagetable, entry, PTE_X) ||
       !user_stacks_valid(pagetable) || argc > MAXARG ||
-      (stack & (sizeof(uint64) - 1)) != 0 || stack < MMIX_USER_STACK_BASE ||
+      (stack & (sizeof(uint64) - 1)) != 0 || stack < argbase ||
       stack > MMIX_USER_STACK_TOP)
     return -1;
   argv_size = (argc + 1) * sizeof(uint64);
   if ((argc != 0 && argv == 0) ||
-      (argv != 0 && (argv < stack || argv > MMIX_USER_STACK_TOP - argv_size)))
+      (argv != 0 && ((argv & (sizeof(uint64) - 1)) != 0 || argv < stack ||
+                     argv > MMIX_USER_STACK_TOP - argv_size)))
     return -1;
 
   memset(&initial, 0, sizeof(initial));
