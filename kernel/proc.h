@@ -21,7 +21,9 @@
 #define MMIX_PROC_TRAPFRAME_RQ_OFFSET           104
 #define MMIX_PROC_TRAPFRAME_FLAGS_OFFSET        112
 #define MMIX_PROC_TRAPFRAME_RESERVED_OFFSET     120
-#define MMIX_PROC_TRAPFRAME_SIZE                128
+#define MMIX_PROC_TRAPFRAME_TRANSLATION_R253_OFFSET 128
+#define MMIX_PROC_TRAPFRAME_TRANSLATION_R254_OFFSET 136
+#define MMIX_PROC_TRAPFRAME_SIZE                144
 #define MMIX_PROC_TRAPFRAME_ALIGN               8
 
 #define MMIX_PROC_USER_RK (MMIX_RQ_PROGRAM_MASK | MMIX_RQ_INTC)
@@ -55,6 +57,9 @@ struct trapframe {
   uint64 rq;
   uint64 flags;
   uint64 reserved;
+  // Scratch used before SAVE has made the user registers process-owned.
+  uint64 translation_r253;
+  uint64 translation_r254;
 };
 
 #define MMIX_ASSERT_PROC_TRAPFRAME_OFFSET(field, offset)                       \
@@ -86,6 +91,10 @@ MMIX_ASSERT_PROC_TRAPFRAME_OFFSET(rq, MMIX_PROC_TRAPFRAME_RQ_OFFSET);
 MMIX_ASSERT_PROC_TRAPFRAME_OFFSET(flags, MMIX_PROC_TRAPFRAME_FLAGS_OFFSET);
 MMIX_ASSERT_PROC_TRAPFRAME_OFFSET(
   reserved, MMIX_PROC_TRAPFRAME_RESERVED_OFFSET);
+MMIX_ASSERT_PROC_TRAPFRAME_OFFSET(
+  translation_r253, MMIX_PROC_TRAPFRAME_TRANSLATION_R253_OFFSET);
+MMIX_ASSERT_PROC_TRAPFRAME_OFFSET(
+  translation_r254, MMIX_PROC_TRAPFRAME_TRANSLATION_R254_OFFSET);
 
 #undef MMIX_ASSERT_PROC_TRAPFRAME_OFFSET
 
@@ -93,7 +102,7 @@ _Static_assert(sizeof(struct trapframe) == MMIX_PROC_TRAPFRAME_SIZE,
                "MMIX user trapframe size mismatch");
 _Static_assert(__alignof__(struct trapframe) == MMIX_PROC_TRAPFRAME_ALIGN,
                "MMIX user trapframe alignment mismatch");
-_Static_assert(MMIX_PROC_TRAPFRAME_RESERVED_OFFSET + sizeof(uint64) ==
+_Static_assert(MMIX_PROC_TRAPFRAME_TRANSLATION_R254_OFFSET + sizeof(uint64) ==
                  MMIX_PROC_TRAPFRAME_SIZE,
                "user trapframe offsets must cover its fixed header");
 

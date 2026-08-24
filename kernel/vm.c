@@ -2,6 +2,8 @@
 #include "defs.h"
 #include "diagnostic.h"
 #include "kalloc.h"
+#include "spinlock.h"
+#include "proc.h"
 #include "vm.h"
 
 #define MMIX_PT_LEVEL1_SPAN          (PGSIZE * MMIX_PT_ENTRIES)
@@ -68,7 +70,9 @@ pagetable_valid(pagetable_t pagetable)
   return kalloc_page_is_managed(pagetable) &&
          managed_page_range(root_pa, MMIX_USER_ROOT_BLOCKS) &&
          asn >= MMIX_USER_ASN_FIRST && asn <= MMIX_USER_ASN_LAST &&
-         pagetable->rv == mmix_user_rv_make(root_pa, asn);
+         MMIX_RV_F(pagetable->rv) <= MMIX_RV_F_SOFTWARE &&
+         (pagetable->rv & ~MMIX_RV_F_VALUE_MASK) ==
+           mmix_user_rv_make(root_pa, asn);
 }
 
 static int
@@ -500,6 +504,53 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
   return newsz;
 }
 
+// Resolve a software-translation miss. Existing mappings are returned when
+// they permit the access; only an absent page in the current process's logical
+// heap may be materialized as demand-zero memory.
+uint64
+vmfault(pagetable_t pagetable, uint64 va, int permissions)
+{
+  struct proc *p = myproc();
+  uint64 page_va = PGROUNDDOWN(va);
+  pte_t *leaf;
+  int status;
+  void *page;
+
+  if (p == 0 || pagetable == 0 || pagetable != p->pagetable ||
+      MMIX_RV_F(pagetable->rv) != MMIX_RV_F_SOFTWARE ||
+      (permissions != 0 && !permissions_valid((uint64)permissions)))
+    return 0;
+
+  status = walk_leaf(pagetable, page_va, 0, &leaf);
+  if (status == WALK_OK && *leaf != 0) {
+    if (!leaf_valid(pagetable, *leaf) ||
+        (permissions != 0 &&
+         (mmix_pte_permissions(*leaf) & (uint64)permissions) !=
+           (uint64)permissions))
+      return 0;
+    return *leaf;
+  }
+  if ((status != WALK_ABSENT && status != WALK_OK) ||
+      (status == WALK_OK && *leaf != 0) || permissions == 0 ||
+      (permissions & PTE_X) != 0 ||
+      va < MMIX_USER_IMAGE_BASE || va >= p->sz)
+    return 0;
+
+  page = kalloc();
+  if (page == 0)
+    return 0;
+  memset(page, 0, PGSIZE);
+  if (mappages(pagetable, page_va, PGSIZE, (uint64)page,
+               PTE_R | PTE_W) < 0) {
+    kfree(page);
+    return 0;
+  }
+  leaf = walk(pagetable, page_va, 0);
+  if (leaf == 0 || !leaf_valid(pagetable, *leaf))
+    panic("vmfault mapping");
+  return *leaf;
+}
+
 static int
 uvmalloc_range(pagetable_t pagetable, uint64 start, uint64 end)
 {
@@ -667,8 +718,11 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     uint64 pa;
     uint64 count;
 
-    if (mmix_pagetable_translate(pagetable, dstva, PTE_W, &pa) < 0)
-      return -1;
+    if (mmix_pagetable_translate(pagetable, dstva, PTE_W, &pa) < 0) {
+      if (vmfault(pagetable, dstva, PTE_R | PTE_W) == 0 ||
+          mmix_pagetable_translate(pagetable, dstva, PTE_W, &pa) < 0)
+        return -1;
+    }
     count = PGSIZE - (dstva & (PGSIZE - 1));
     if (count > len)
       count = len;
@@ -691,8 +745,11 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
     uint64 pa;
     uint64 count;
 
-    if (mmix_pagetable_translate(pagetable, srcva, PTE_R, &pa) < 0)
-      return -1;
+    if (mmix_pagetable_translate(pagetable, srcva, PTE_R, &pa) < 0) {
+      if (vmfault(pagetable, srcva, PTE_R) == 0 ||
+          mmix_pagetable_translate(pagetable, srcva, PTE_R, &pa) < 0)
+        return -1;
+    }
     count = PGSIZE - (srcva & (PGSIZE - 1));
     if (count > len)
       count = len;
@@ -715,8 +772,11 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     uint64 pa;
     uint64 count;
 
-    if (mmix_pagetable_translate(pagetable, srcva, PTE_R, &pa) < 0)
-      return -1;
+    if (mmix_pagetable_translate(pagetable, srcva, PTE_R, &pa) < 0) {
+      if (vmfault(pagetable, srcva, PTE_R) == 0 ||
+          mmix_pagetable_translate(pagetable, srcva, PTE_R, &pa) < 0)
+        return -1;
+    }
     count = PGSIZE - (srcva & (PGSIZE - 1));
     if (count > max)
       count = max;

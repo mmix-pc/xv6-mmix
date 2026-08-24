@@ -14,6 +14,7 @@ pagetable_t uvmcreate(uint asn);
 uint64 uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz,
                 int permissions);
 uint64 uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz);
+uint64 vmfault(pagetable_t pagetable, uint64 va, int permissions);
 int uvmallocstacks(pagetable_t pagetable);
 int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz);
 void uvmfree(pagetable_t pagetable, uint64 sz);

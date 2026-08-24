@@ -38,6 +38,7 @@
 #define MMIX_RV_N_VALUE_MASK 0x3ff
 #define MMIX_RV_F_VALUE_MASK 0x7
 #define MMIX_RV_F_HARDWARE   0
+#define MMIX_RV_F_SOFTWARE   1
 
 #define MMIX_RV_B1(value) (((value) >> MMIX_RV_B1_SHIFT) & MMIX_RV_B_VALUE_MASK)
 #define MMIX_RV_B2(value) (((value) >> MMIX_RV_B2_SHIFT) & MMIX_RV_B_VALUE_MASK)
@@ -125,6 +126,13 @@
 // A negative rXX selects the resume-next form used by forced and external
 // dynamic traps.
 #define MMIX_DYNAMIC_TRAP_RESUME_NEXT 0x8000000000000000
+
+// A software-translation miss saves the faulting instruction below this
+// architectural RESUME 1 prefix. Instruction misses use SWYM as a placeholder.
+#define MMIX_FORCED_TRANSLATION_PREFIX    0x0300000000000000
+#define MMIX_FORCED_TRANSLATION_MASK      0xffffffff00000000
+#define MMIX_FORCED_TRANSLATION_INSN_MASK 0x00000000ffffffff
+#define MMIX_SWYM_INSN                    0xfd000000
 
 // TRAP 0,Y,Z is reserved for semihosting. The kernel uses this exact
 // nonzero-X instruction when it deliberately requests a resumable trap.
@@ -268,6 +276,13 @@ mmix_user_rv_make(uint64 root_pa, uint64 asn)
   return MMIX_RV_BUILD(MMIX_USER_B1, MMIX_USER_B2, MMIX_USER_B3,
                        MMIX_USER_B4, MMIX_USER_S, root_pa >> PGSHIFT, asn,
                        MMIX_USER_F);
+}
+
+static inline uint64
+mmix_user_rv_set_function(uint64 rv, uint64 function)
+{
+  return (rv & ~MMIX_RV_F_VALUE_MASK) |
+         (function & MMIX_RV_F_VALUE_MASK);
 }
 
 static inline uint64
@@ -653,6 +668,8 @@ _Static_assert(MMIX_USER_RV_BASE ==
                  MMIX_RV_BUILD(MMIX_USER_B1, MMIX_USER_B2, MMIX_USER_B3,
                                MMIX_USER_B4, MMIX_USER_S, 0, 0, MMIX_USER_F),
                "user rV base must match its named fields");
+_Static_assert(MMIX_RV_F(MMIX_USER_RV_BASE) == MMIX_RV_F_HARDWARE,
+               "user rV must default to hardware translation");
 _Static_assert(MMIX_USER_ROOT_BLOCKS == 3,
                "user rV must use three contiguous root blocks");
 _Static_assert(MMIX_USER_SEGMENT0_LIMIT ==

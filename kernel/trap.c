@@ -270,6 +270,72 @@ user_program_cause(uint64 cause)
 }
 
 static int
+user_translation_permissions(uint64 rxx)
+{
+  enum {
+    MMIX_OPCODE_LOAD_FIRST = 0x80,
+    MMIX_OPCODE_LOAD_LAST = 0x93,
+    MMIX_OPCODE_CSWAP_FIRST = 0x94,
+    MMIX_OPCODE_CSWAP_LAST = 0x95,
+    MMIX_OPCODE_LOAD_UNCACHED_FIRST = 0x96,
+    MMIX_OPCODE_LOAD_UNCACHED_LAST = 0x97,
+    MMIX_OPCODE_STORE_FIRST = 0xa0,
+    MMIX_OPCODE_STORE_LAST = 0xb7,
+  };
+  uint instruction;
+  uint opcode;
+
+  if ((rxx & MMIX_FORCED_TRANSLATION_MASK) !=
+      MMIX_FORCED_TRANSLATION_PREFIX)
+    return -1;
+  instruction = (uint)(rxx & MMIX_FORCED_TRANSLATION_INSN_MASK);
+  if (instruction == MMIX_SWYM_INSN)
+    return PTE_X;
+  opcode = instruction >> 24;
+  if ((opcode >= MMIX_OPCODE_LOAD_FIRST &&
+       opcode <= MMIX_OPCODE_LOAD_LAST) ||
+      (opcode >= MMIX_OPCODE_LOAD_UNCACHED_FIRST &&
+       opcode <= MMIX_OPCODE_LOAD_UNCACHED_LAST))
+    return PTE_R;
+  if ((opcode >= MMIX_OPCODE_CSWAP_FIRST &&
+       opcode <= MMIX_OPCODE_CSWAP_LAST) ||
+      (opcode >= MMIX_OPCODE_STORE_FIRST &&
+       opcode <= MMIX_OPCODE_STORE_LAST))
+    return PTE_R | PTE_W;
+
+  // Implicit register-stack accesses retain the interrupted instruction's
+  // opcode. Offer only an existing mapping and let RESUME validate its use.
+  return 0;
+}
+
+static int
+user_translation_trap(struct proc *p)
+{
+  struct trapframe *trapframe = p->trapframe;
+  int permissions = user_translation_permissions(trapframe->rxx);
+  uint64 pte;
+
+  if (permissions < 0)
+    return 0;
+  pte = vmfault(p->pagetable, trapframe->ryy, permissions);
+  if (pte == 0) {
+    const char *cause = permissions == PTE_X ? "execute fault" :
+                        permissions == PTE_R ? "read fault" :
+                        permissions == (PTE_R | PTE_W) ? "write fault" :
+                        "translation fault";
+
+    user_trap_report(cause, p, 0);
+    setkilled(p);
+  } else {
+    trapframe->rzz = pte;
+  }
+  // Forced translation entry performed GET rQ just like every other user
+  // entry, so complete that CPU-owned request handoff before returning.
+  mmix_rq_write(trapframe->rq);
+  return 1;
+}
+
+static int
 user_syscall_trap(struct proc *p)
 {
   struct trapframe *trapframe = p->trapframe;
@@ -325,6 +391,8 @@ usertrap(void)
     trapframe->rq &= ~MMIX_RQ_PROGRAM_MASK;
     mmix_rq_write(trapframe->rq);
     setkilled(p);
+  } else if (user_translation_trap(p)) {
+    // RESUME 1 installs rZZ and retries the instruction that missed.
   } else if (trapframe->rxx == MMIX_DYNAMIC_TRAP_RESUME_NEXT &&
              mmix_rq_intc_pending(trapframe->rq, trapframe->user_rk)) {
     uint32 irq;

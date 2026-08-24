@@ -31,8 +31,6 @@ static __attribute__((always_inline)) inline int
 valid_memory_layout(const struct mmix_bootinfo *info)
 {
   if (info->ram_base != LOW_RAM_BASE || info->ram_size < RAM_REQUIRED_SIZE ||
-      !range_contains(info->ram_base, info->ram_size, LOW_RAM_BASE,
-                      RAM_REQUIRED_SIZE) ||
       !range_contains(info->ram_base, info->ram_size, BOOTINFO_BASE,
                       BOOTINFO_SIZE))
     return 0;

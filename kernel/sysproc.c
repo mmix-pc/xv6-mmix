@@ -47,10 +47,26 @@ sys_sbrk(void)
   argint(1, &t);
   addr = myproc()->sz;
 
-  // Recoverable user page faults are not enabled, so a positive lazy request
-  // cannot safely publish an unmapped extension. Shrinking needs no fault.
-  if ((t != SBRK_EAGER && n >= 0) || growproc(n) < 0)
+  if (t != SBRK_EAGER && t != SBRK_LAZY)
     return -1;
+  if (n == 0)
+    return addr;
+  if (t == SBRK_EAGER || n < 0) {
+    if (growproc(n) < 0)
+      return -1;
+  } else {
+    struct proc *p = myproc();
+
+    // Forced translation supplies the missing address to vmfault(); ordinary
+    // processes retain hardware walks and avoid needless translation traps.
+    if (p == 0 || p->pagetable == 0 || p->sz < MMIX_USER_IMAGE_BASE ||
+        (uint64)n > MMIX_USER_HEAP_LIMIT - p->sz)
+      return -1;
+    p->sz += (uint64)n;
+    p->pagetable->rv =
+      mmix_user_rv_set_function(p->pagetable->rv, MMIX_RV_F_SOFTWARE);
+    p->trapframe->user_rv = p->pagetable->rv;
+  }
   return addr;
 }
 
