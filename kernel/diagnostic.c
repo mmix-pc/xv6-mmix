@@ -113,10 +113,15 @@ diagnostic_paging(uint64 rv)
 void
 diagnostic_trap(const struct mmix_trap_diagnostic *diagnostic)
 {
-  diagnostic_puts("kernel trap: class=");
+  diagnostic_puts(diagnostic->from_user ? "user trap: class=" :
+                                         "kernel trap: class=");
   diagnostic_puts(diagnostic->event_class);
   diagnostic_puts(" cause=");
   diagnostic_puts(diagnostic->cause);
+  diagnostic_puts(" pid=");
+  diagnostic_put_int(diagnostic->pid);
+  diagnostic_puts(" name=");
+  diagnostic_puts(diagnostic->process_name);
   diagnostic_puts("\nrq=");
   diagnostic_put_hex64(diagnostic->rq);
   diagnostic_puts(" rk=");

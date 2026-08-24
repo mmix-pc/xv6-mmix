@@ -4,8 +4,11 @@
 struct mmix_boot_state;
 
 struct mmix_trap_diagnostic {
+  int from_user;
   const char *event_class;
   const char *cause;
+  int pid;
+  const char *process_name;
   uint64 rq;
   uint64 active_rk;
   uint64 restore_rk;

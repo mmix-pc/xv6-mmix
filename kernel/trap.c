@@ -23,6 +23,7 @@ static void
 trap_report(enum mmix_trap_class event, const char *cause,
             const struct mmix_trap_state *state, uint32 claim)
 {
+  struct proc *p = mycpu()->proc;
   const char *event_class = "unknown";
   uint32 enabled_irqs = ~(uint32)0;
   uint32 pending_irqs = ~(uint32)0;
@@ -43,8 +44,11 @@ trap_report(enum mmix_trap_class event, const char *cause,
     timer_is_pending = -1;
 
   struct mmix_trap_diagnostic diagnostic = {
+    .from_user = 0,
     .event_class = event_class,
     .cause = cause,
+    .pid = p == 0 ? 0 : p->pid,
+    .process_name = p == 0 ? "-" : p->name,
     .rq = state->rq,
     .active_rk = mmix_rk_read(),
     .restore_rk = state->restore_rk,
@@ -185,7 +189,8 @@ trap_external(struct mmix_trap_state *state)
 }
 
 static void
-user_trap_report(const char *cause, struct proc *p, uint32 claim)
+trapframe_report(int from_user, const char *event_class, const char *cause,
+                 struct proc *p, uint32 claim)
 {
   struct trapframe *trapframe = p->trapframe;
   uint64 fp = 0;
@@ -210,8 +215,11 @@ user_trap_report(const char *cause, struct proc *p, uint32 claim)
     timer_is_pending = -1;
 
   struct mmix_trap_diagnostic diagnostic = {
-    .event_class = "user",
+    .from_user = from_user,
+    .event_class = event_class,
     .cause = cause,
+    .pid = p->pid,
+    .process_name = p->name,
     .rq = trapframe->rq,
     .active_rk = mmix_rk_read(),
     .restore_rk = trapframe->user_rk,
@@ -235,6 +243,12 @@ user_trap_report(const char *cause, struct proc *p, uint32 claim)
 }
 
 static void
+user_trap_report(const char *cause, struct proc *p, uint32 claim)
+{
+  trapframe_report(1, "user", cause, p, claim);
+}
+
+static void
 user_trap_stop(const char *cause, struct proc *p, uint32 claim)
   __attribute__((noreturn));
 
@@ -242,7 +256,7 @@ static void
 user_trap_stop(const char *cause, struct proc *p, uint32 claim)
 {
   mmix_intr_mask_write(0);
-  user_trap_report(cause, p, claim);
+  trapframe_report(0, "external", cause, p, claim);
   for (;;)
     asm volatile("SWYM 0, 0, 0");
 }
