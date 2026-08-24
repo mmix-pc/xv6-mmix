@@ -62,6 +62,8 @@ sys_sbrk(void)
     if (p == 0 || p->pagetable == 0 || p->sz < MMIX_USER_IMAGE_BASE ||
         (uint64)n > MMIX_USER_HEAP_LIMIT - p->sz)
       return -1;
+    if (p->lazy_start == 0)
+      p->lazy_start = p->sz;
     p->sz += (uint64)n;
     p->pagetable->rv =
       mmix_user_rv_set_function(p->pagetable->rv, MMIX_RV_F_SOFTWARE);

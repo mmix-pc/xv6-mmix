@@ -533,7 +533,7 @@ vmfault(pagetable_t pagetable, uint64 va, int permissions)
   if ((status != WALK_ABSENT && status != WALK_OK) ||
       (status == WALK_OK && *leaf != 0) || permissions == 0 ||
       (permissions & PTE_X) != 0 ||
-      va < MMIX_USER_IMAGE_BASE || va >= p->sz)
+      p->lazy_start == 0 || va < p->lazy_start || va >= p->sz)
     return 0;
 
   page = kalloc();
@@ -674,8 +674,10 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       uvmcopy_range(old, new, MMIX_USER_STACK_BASE,
                     MMIX_USER_STACK_TOP) == 0 &&
       uvmcopy_range(old, new, MMIX_USER_REGISTER_STACK_BASE,
-                    MMIX_USER_REGISTER_STACK_TOP) == 0)
+                    MMIX_USER_REGISTER_STACK_TOP) == 0) {
+    new->rv = mmix_user_rv_set_function(new->rv, MMIX_RV_F(old->rv));
     return 0;
+  }
 
   uvmremove_range(new, MMIX_USER_IMAGE_BASE, image_end);
   uvmremove_range(new, MMIX_USER_STACK_BASE, MMIX_USER_STACK_TOP);

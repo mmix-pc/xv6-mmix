@@ -103,7 +103,7 @@ static int
 proc_user_state_empty(struct proc *p)
 {
   if (p->pagetable != 0 || p->trapframe != 0 || p->cwd != 0 || p->sz != 0 ||
-      p->parent != 0)
+      p->lazy_start != 0 || p->parent != 0)
     return 0;
   for (int fd = 0; fd < NOFILE; fd++)
     if (p->ofile[fd] != 0)
@@ -128,6 +128,7 @@ proc_clear(struct proc *p, int clear_context)
   p->pid = 0;
   p->parent = 0;
   p->sz = 0;
+  p->lazy_start = 0;
   p->pagetable = 0;
   p->trapframe = 0;
   for (int fd = 0; fd < NOFILE; fd++)
@@ -182,7 +183,8 @@ proc_release(struct proc *p)
   if (p == 0 || !holding(&p->lock) ||
       (p->state != USED && p->state != ZOMBIE))
     panic("proc release");
-  if (p->pagetable != 0 || p->trapframe != 0 || p->cwd != 0 || p->sz != 0)
+  if (p->pagetable != 0 || p->trapframe != 0 || p->cwd != 0 || p->sz != 0 ||
+      p->lazy_start != 0)
     panic("proc release resource");
   for (int fd = 0; fd < NOFILE; fd++)
     if (p->ofile[fd] != 0)
@@ -239,6 +241,7 @@ proc_user_free(struct proc *p)
     p->pagetable = 0;
   }
   p->sz = 0;
+  p->lazy_start = 0;
   if (p->trapframe != 0) {
     kfree(p->trapframe);
     p->trapframe = 0;
@@ -351,6 +354,7 @@ proc_exec(pagetable_t pagetable, uint64 sz, uint64 entry, uint64 stack,
   oldsz = p->sz;
   p->pagetable = pagetable;
   p->sz = sz;
+  p->lazy_start = 0;
   *p->trapframe = next;
   proc_freepagetable(oldpagetable, oldsz);
   return 0;
@@ -385,6 +389,11 @@ proc_user_clone(struct proc *parent, void (*kernel_entry)(void))
   if (parent == 0 || parent->pagetable == 0 || parent->trapframe == 0 ||
       parent->sz < MMIX_USER_IMAGE_BASE ||
       parent->trapframe->user_state == 0 ||
+      ((parent->lazy_start == 0) !=
+       (MMIX_RV_F(parent->pagetable->rv) == MMIX_RV_F_HARDWARE)) ||
+      (parent->lazy_start != 0 &&
+       (parent->lazy_start < MMIX_USER_IMAGE_BASE ||
+        parent->lazy_start > parent->sz)) ||
       parent->trapframe->user_rv != parent->pagetable->rv ||
       parent->trapframe->user_rk != MMIX_PROC_USER_RK)
     return 0;
@@ -396,6 +405,7 @@ proc_user_clone(struct proc *parent, void (*kernel_entry)(void))
     goto fail;
 
   child->sz = parent->sz;
+  child->lazy_start = parent->lazy_start;
   *child->trapframe = *parent->trapframe;
   child->trapframe->kernel_state = 0;
   child->trapframe->user_rv = child->pagetable->rv;
@@ -509,7 +519,8 @@ proc_user_grow(struct proc *p, int n)
   uint64 oldsz;
   uint64 newsz;
 
-  if (p == 0 || p->pagetable == 0 || p->sz < MMIX_USER_IMAGE_BASE)
+  if (p == 0 || p->pagetable == 0 || p->trapframe == 0 ||
+      p->sz < MMIX_USER_IMAGE_BASE)
     return -1;
   oldsz = p->sz;
   if (n > 0) {
@@ -519,13 +530,18 @@ proc_user_grow(struct proc *p, int n)
     if (uvmalloc(p->pagetable, oldsz, newsz, PTE_W) == 0)
       return -1;
   } else if (n < 0) {
-    uint64 amount = (uint64)(-(long)n);
-
-    if (amount > oldsz - MMIX_USER_IMAGE_BASE)
+    // Match xv6: an unsigned underflow is a successful no-op in uvmdealloc().
+    newsz = oldsz + (long)n;
+    if (newsz < MMIX_USER_IMAGE_BASE)
       return -1;
-    newsz = oldsz - amount;
-    if (uvmdealloc(p->pagetable, oldsz, newsz) != newsz)
-      return -1;
+    newsz = uvmdealloc(p->pagetable, oldsz, newsz);
+    if (p->lazy_start != 0 && newsz <= p->lazy_start) {
+      // No sparse interval remains, so hardware walks are sufficient again.
+      p->lazy_start = 0;
+      p->pagetable->rv =
+        mmix_user_rv_set_function(p->pagetable->rv, MMIX_RV_F_HARDWARE);
+      p->trapframe->user_rv = p->pagetable->rv;
+    }
   } else {
     return 0;
   }
