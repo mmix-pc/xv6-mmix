@@ -263,6 +263,10 @@
 
 #define KALLOC_START(kernel_end) ROUNDUP(kernel_end, MMIX_PAGE_SIZE)
 #define KALLOC_LOW_LIMIT BOOT_STACK_BASE
+#define KALLOC_RECLAIMED_START BARE_SEGMENT_BACKING_BASE
+#define KALLOC_RECLAIMED_LIMIT BARE_SEGMENT_BACKING_LIMIT
+#define KALLOC_RECLAIMED_PAGES                                      \
+  ((KALLOC_RECLAIMED_LIMIT - KALLOC_RECLAIMED_START) / MMIX_PAGE_SIZE)
 #define KALLOC_EXTENDED_START EXTENDED_RAM_BASE
 #define KALLOC_EXTENDED_LIMIT EXTENDED_RAM_END
 
@@ -383,6 +387,10 @@ _Static_assert(KALLOC_LOW_LIMIT <= LOW_RAM_END,
                "Low allocator limit must remain inside Low RAM");
 _Static_assert(KALLOC_START(KERNEL_LOAD) < KALLOC_LOW_LIMIT,
                "bootstrap allocator range must be non-empty");
+_Static_assert(KALLOC_RECLAIMED_START == POOL_PHYS_BASE &&
+                   KALLOC_RECLAIMED_LIMIT == STACK_PHYS_END &&
+                   KALLOC_RECLAIMED_PAGES == 17408,
+               "reclaimed allocator range must cover the bare segments");
 _Static_assert(KALLOC_EXTENDED_START == EXTENDED_RAM_BASE &&
                    KALLOC_EXTENDED_LIMIT == RAM_MANAGED_END,
                "extended allocator range must match the managed RAM tail");
