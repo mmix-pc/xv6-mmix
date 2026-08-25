@@ -48,6 +48,14 @@
 #define STACK_SIZE 0x0000000004000000
 #define STACK_PHYS_END (STACK_PHYS_BASE + STACK_SIZE)
 
+// Physical backing for the three bare segments is one adjacent platform
+// interval. Paging maps it as ordinary read/write, non-executable memory;
+// allocator ownership is established separately after rV becomes live.
+#define BARE_SEGMENT_BACKING_BASE POOL_PHYS_BASE
+#define BARE_SEGMENT_BACKING_LIMIT STACK_PHYS_END
+#define BARE_SEGMENT_BACKING_SIZE                                      \
+  (BARE_SEGMENT_BACKING_LIMIT - BARE_SEGMENT_BACKING_BASE)
+
 #define PLATFORM_RAM_BASE 0x000000000e800000
 #define PLATFORM_RAM_SIZE 0x0000000000800000
 #define PLATFORM_RAM_END (PLATFORM_RAM_BASE + PLATFORM_RAM_SIZE)
@@ -159,7 +167,9 @@
 //   0x0000000000010000 +----------------------------------+
 //                      | Identity Low RAM                 |
 //   0x0000000006000000 +----------------------------------+
-//                      | Unmapped reserved physical area  |
+//                      | Identity bare-segment backing    |
+//   0x000000000e800000 +----------------------------------+
+//                      | Unmapped platform/framebuffer    |
 //   0x0000000010000000 +----------------------------------+
 //                      | Identity MMIO and Extended RAM   |
 //   0x0000000020000000 +----------------------------------+
@@ -279,6 +289,14 @@ _Static_assert(DATA_PHYS_END == STACK_PHYS_BASE,
                "Data and Stack Segment backing must be adjacent");
 _Static_assert(STACK_PHYS_END == PLATFORM_RAM_BASE,
                "Stack Segment backing must end at platform RAM");
+_Static_assert(BARE_SEGMENT_BACKING_BASE == LOW_RAM_END &&
+                   BARE_SEGMENT_BACKING_LIMIT == PLATFORM_RAM_BASE &&
+                   BARE_SEGMENT_BACKING_SIZE == 0x0000000008800000,
+               "bare-segment backing interval must remain contiguous");
+_Static_assert((BARE_SEGMENT_BACKING_BASE & (MMIX_PAGE_SIZE - 1)) == 0 &&
+                   (BARE_SEGMENT_BACKING_LIMIT &
+                    (MMIX_PAGE_SIZE - 1)) == 0,
+               "bare-segment backing must use whole MMIX pages");
 _Static_assert(PLATFORM_RAM_END == FRAMEBUFFER_BASE,
                "platform RAM must end at the framebuffer");
 _Static_assert(FRAMEBUFFER_END == MMIO_BASE,

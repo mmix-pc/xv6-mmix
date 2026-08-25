@@ -8,10 +8,13 @@
 
 #define MMIX_PT_LEVEL1_SPAN          (PGSIZE * MMIX_PT_ENTRIES)
 #define MMIX_KERNEL_LOW_CHILDREN     (LOW_RAM_END / MMIX_PT_LEVEL1_SPAN - 1)
+#define MMIX_KERNEL_BARE_CHILDREN                                         \
+  (BARE_SEGMENT_BACKING_SIZE / MMIX_PT_LEVEL1_SPAN)
 #define MMIX_KERNEL_UPPER_CHILDREN                                      \
   ((RAM_MANAGED_END - MMIO_BASE) / MMIX_PT_LEVEL1_SPAN)
-#define MMIX_KERNEL_CHILD_TABLES                                               \
-  (MMIX_KERNEL_LOW_CHILDREN + MMIX_KERNEL_UPPER_CHILDREN)
+#define MMIX_KERNEL_CHILD_TABLES                                        \
+  (MMIX_KERNEL_LOW_CHILDREN + MMIX_KERNEL_BARE_CHILDREN +               \
+   MMIX_KERNEL_UPPER_CHILDREN)
 #define MMIX_KERNEL_DEVICE_MAP_END (INTC_BASE + INTC_SIZE)
 
 extern char kernel_text_end[];
@@ -25,9 +28,15 @@ pagetable_t kernel_pagetable = &kernel_table;
 
 _Static_assert((LOW_RAM_END % MMIX_PT_LEVEL1_SPAN) == 0,
                "Low RAM must end on a level-1 table span");
+_Static_assert((BARE_SEGMENT_BACKING_BASE % MMIX_PT_LEVEL1_SPAN) == 0 &&
+                 (BARE_SEGMENT_BACKING_LIMIT % MMIX_PT_LEVEL1_SPAN) == 0 &&
+                 MMIX_KERNEL_BARE_CHILDREN == 17,
+               "bare-segment backing must cover 17 level-1 spans");
 _Static_assert((MMIO_BASE % MMIX_PT_LEVEL1_SPAN) == 0 &&
                  (RAM_MANAGED_END % MMIX_PT_LEVEL1_SPAN) == 0,
                "upper kernel map must use complete level-1 spans");
+_Static_assert(MMIX_KERNEL_CHILD_TABLES == 60,
+               "kernel identity map must use 60 child tables");
 _Static_assert(UART0_BASE / MMIX_PT_LEVEL1_SPAN ==
                  (MMIX_KERNEL_DEVICE_MAP_END - 1) / MMIX_PT_LEVEL1_SPAN,
                "kernel devices must share one level-1 child table");
@@ -811,6 +820,9 @@ kernel_expected_entry(uint64 va)
     permissions = PTE_R;
   else if (va >= rodata_end && va < LOW_RAM_END)
     permissions = PTE_R | PTE_W;
+  else if (va >= BARE_SEGMENT_BACKING_BASE &&
+           va < BARE_SEGMENT_BACKING_LIMIT)
+    permissions = PTE_R | PTE_W;
   else if (va >= UART0_BASE && va < RAM_MANAGED_END)
     permissions = PTE_R | PTE_W;
   else
@@ -830,6 +842,8 @@ level1_child_required(uint64 index)
   base = index * MMIX_PT_LEVEL1_SPAN;
   limit = base + MMIX_PT_LEVEL1_SPAN;
   return (base < LOW_RAM_END && limit > REGISTER_STACK_BASE) ||
+         (base < BARE_SEGMENT_BACKING_LIMIT &&
+          limit > BARE_SEGMENT_BACKING_BASE) ||
          (base < RAM_MANAGED_END && limit > UART0_BASE);
 }
 
@@ -866,6 +880,20 @@ require_unmapped(pagetable_t pagetable, uint64 va)
   uint64 pa;
 
   return mmix_pagetable_translate(pagetable, va, PTE_R, &pa) < 0 ? 0 : -1;
+}
+
+static int
+require_identity_permissions(pagetable_t pagetable, uint64 va,
+                             uint64 permissions)
+{
+  uint64 pa;
+  pte_t *leaf;
+
+  return mmix_pagetable_translate(pagetable, va, permissions, &pa) == 0 &&
+             pa == va && walk_leaf(pagetable, va, 0, &leaf) == WALK_OK &&
+             mmix_pte_permissions(*leaf) == permissions
+           ? 0
+           : -1;
 }
 
 static int
@@ -943,6 +971,18 @@ kernel_pagetable_audit(pagetable_t pagetable)
       require_identity(pagetable, KALLOC_LOW_LIMIT - PGSIZE,
                        PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, BOOT_STACK_BASE, PTE_R | PTE_W) < 0 ||
+      require_identity_permissions(pagetable, POOL_PHYS_BASE,
+                                   PTE_R | PTE_W) < 0 ||
+      require_identity_permissions(pagetable, POOL_PHYS_END - PGSIZE,
+                                   PTE_R | PTE_W) < 0 ||
+      require_identity_permissions(pagetable, DATA_PHYS_BASE,
+                                   PTE_R | PTE_W) < 0 ||
+      require_identity_permissions(pagetable, DATA_PHYS_END - PGSIZE,
+                                   PTE_R | PTE_W) < 0 ||
+      require_identity_permissions(pagetable, STACK_PHYS_BASE,
+                                   PTE_R | PTE_W) < 0 ||
+      require_identity_permissions(pagetable, STACK_PHYS_END - PGSIZE,
+                                   PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, UART0_BASE, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, VIRTIO0_BASE, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, TIMER_BASE, PTE_R | PTE_W) < 0 ||
@@ -968,12 +1008,16 @@ kernel_pagetable_audit(pagetable_t pagetable)
 
   if (require_unmapped(pagetable, MMIX_LOW_VECTOR_BASE) < 0 ||
       require_unmapped(pagetable, KERNEL_ROOT_BASE) < 0 ||
-      require_unmapped(pagetable, POOL_PHYS_BASE) < 0 ||
+      require_unmapped(pagetable, PLATFORM_RAM_BASE) < 0 ||
+      require_unmapped(pagetable, PLATFORM_RAM_END - PGSIZE) < 0 ||
       require_unmapped(pagetable, BOOTINFO_BASE) < 0 ||
       require_unmapped(pagetable, FRAMEBUFFER_BASE) < 0 ||
+      require_unmapped(pagetable, FRAMEBUFFER_END - PGSIZE) < 0 ||
       require_unmapped(pagetable, RAM_MANAGED_END) < 0 ||
       require_unmapped(pagetable, MMIX_SEGMENT0_LIMIT - PGSIZE) < 0 ||
-      require_unmapped(pagetable, DATA_LOGICAL_BASE) < 0)
+      require_unmapped(pagetable, POOL_LOGICAL_BASE) < 0 ||
+      require_unmapped(pagetable, DATA_LOGICAL_BASE) < 0 ||
+      require_unmapped(pagetable, STACK_LOGICAL_BASE) < 0)
     return -1;
 
   return 0;
@@ -1011,6 +1055,9 @@ kvminit(void)
                 PTE_R) < 0) ||
       mappages(kernel_pagetable, rodata_end, LOW_RAM_END - rodata_end,
                rodata_end, PTE_R | PTE_W) < 0 ||
+      mappages(kernel_pagetable, BARE_SEGMENT_BACKING_BASE,
+               BARE_SEGMENT_BACKING_SIZE, BARE_SEGMENT_BACKING_BASE,
+               PTE_R | PTE_W) < 0 ||
       mappages(kernel_pagetable, UART0_BASE, RAM_MANAGED_END - UART0_BASE,
                UART0_BASE,
                PTE_R | PTE_W) < 0)
