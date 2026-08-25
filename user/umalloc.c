@@ -25,10 +25,17 @@ void
 free(void *ap)
 {
   Header *bp, *p;
+  uint64 bp_address;
 
   bp = (Header *)ap - 1;
-  for (p = freep; !(bp > p && bp < p->s.ptr); p = p->s.ptr)
-    if (p >= p->s.ptr && (bp > p || bp < p->s.ptr))
+  // xv6 has flat 64-bit addresses, but C defines no ordering between
+  // pointers to unrelated free-list blocks.
+  bp_address = (uint64)bp;
+  for (p = freep;
+       !(bp_address > (uint64)p && bp_address < (uint64)p->s.ptr);
+       p = p->s.ptr)
+    if ((uint64)p >= (uint64)p->s.ptr &&
+        (bp_address > (uint64)p || bp_address < (uint64)p->s.ptr))
       break;
   if (bp + bp->s.size == p->s.ptr) {
     bp->s.size += p->s.ptr->s.size;

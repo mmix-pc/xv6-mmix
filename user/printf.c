@@ -12,30 +12,33 @@ putc(int fd, char c)
   write(fd, &c, 1);
 }
 
+// Use the format specifier's native C type so va_arg matches the caller;
+// a fixed-width typedef such as uint64 may have a different underlying type.
 static void
-printint(int fd, long long xx, int base, int sgn)
+printunsigned(int fd, unsigned long long x, int base)
 {
   char buf[20];
-  int i, neg;
-  unsigned long long x;
-
-  neg = 0;
-  if (sgn && xx < 0) {
-    neg = 1;
-    x = -xx;
-  } else {
-    x = xx;
-  }
+  int i;
 
   i = 0;
   do {
     buf[i++] = digits[x % base];
   } while ((x /= base) != 0);
-  if (neg)
-    buf[i++] = '-';
 
   while (--i >= 0)
     putc(fd, buf[i]);
+}
+
+static void
+printsigned(int fd, long long value, int base)
+{
+  unsigned long long magnitude = value;
+
+  if (value < 0) {
+    putc(fd, '-');
+    magnitude = 0 - magnitude;
+  }
+  printunsigned(fd, magnitude, base);
 }
 
 static void
@@ -71,33 +74,33 @@ vprintf(int fd, const char *fmt, va_list ap)
       if (c1)
         c2 = fmt[i + 2] & 0xff;
       if (c0 == 'd') {
-        printint(fd, va_arg(ap, int), 10, 1);
+        printsigned(fd, va_arg(ap, int), 10);
       } else if (c0 == 'l' && c1 == 'd') {
-        printint(fd, va_arg(ap, uint64), 10, 1);
+        printsigned(fd, va_arg(ap, long), 10);
         i += 1;
       } else if (c0 == 'l' && c1 == 'l' && c2 == 'd') {
-        printint(fd, va_arg(ap, uint64), 10, 1);
+        printsigned(fd, va_arg(ap, long long), 10);
         i += 2;
       } else if (c0 == 'u') {
-        printint(fd, va_arg(ap, uint32), 10, 0);
+        printunsigned(fd, va_arg(ap, unsigned int), 10);
       } else if (c0 == 'l' && c1 == 'u') {
-        printint(fd, va_arg(ap, uint64), 10, 0);
+        printunsigned(fd, va_arg(ap, unsigned long), 10);
         i += 1;
       } else if (c0 == 'l' && c1 == 'l' && c2 == 'u') {
-        printint(fd, va_arg(ap, uint64), 10, 0);
+        printunsigned(fd, va_arg(ap, unsigned long long), 10);
         i += 2;
       } else if (c0 == 'x') {
-        printint(fd, va_arg(ap, uint32), 16, 0);
+        printunsigned(fd, va_arg(ap, unsigned int), 16);
       } else if (c0 == 'l' && c1 == 'x') {
-        printint(fd, va_arg(ap, uint64), 16, 0);
+        printunsigned(fd, va_arg(ap, unsigned long), 16);
         i += 1;
       } else if (c0 == 'l' && c1 == 'l' && c2 == 'x') {
-        printint(fd, va_arg(ap, uint64), 16, 0);
+        printunsigned(fd, va_arg(ap, unsigned long long), 16);
         i += 2;
       } else if (c0 == 'p') {
-        printptr(fd, va_arg(ap, uint64));
+        printptr(fd, (uint64)va_arg(ap, void *));
       } else if (c0 == 'c') {
-        putc(fd, va_arg(ap, uint32));
+        putc(fd, va_arg(ap, int));
       } else if (c0 == 's') {
         if ((s = va_arg(ap, char *)) == 0)
           s = "(null)";
@@ -123,6 +126,7 @@ fprintf(int fd, const char *fmt, ...)
 
   va_start(ap, fmt);
   vprintf(fd, fmt, ap);
+  va_end(ap);
 }
 
 void
@@ -132,4 +136,5 @@ printf(const char *fmt, ...)
 
   va_start(ap, fmt);
   vprintf(1, fmt, ap);
+  va_end(ap);
 }

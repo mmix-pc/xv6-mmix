@@ -114,10 +114,17 @@ memmove(void *vdst, const void *vsrc, int n)
 {
   char *dst;
   const char *src;
+  uint64 source_address;
+  uint64 destination_address;
 
   dst = vdst;
   src = vsrc;
-  if (src > dst) {
+  // xv6 has flat 64-bit addresses, but C defines no ordering between
+  // pointers to unrelated objects.
+  source_address = (uint64)src;
+  destination_address = (uint64)dst;
+  if (source_address > destination_address ||
+      destination_address - source_address >= (uint)n) {
     while (n-- > 0)
       *dst++ = *src++;
   } else {

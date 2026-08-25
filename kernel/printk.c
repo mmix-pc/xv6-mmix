@@ -26,28 +26,33 @@ static struct {
 
 static char digits[] = "0123456789abcdef";
 
+// Use the format specifier's native C type so va_arg matches the caller;
+// a fixed-width typedef such as uint64 may have a different underlying type.
 static void
-printint(long long xx, int base, int sign)
+printunsigned(unsigned long long x, int base)
 {
   char buf[20];
   int i;
-  unsigned long long x;
-
-  if (sign && (sign = (xx < 0)))
-    x = -xx;
-  else
-    x = xx;
 
   i = 0;
   do {
     buf[i++] = digits[x % base];
   } while ((x /= base) != 0);
 
-  if (sign)
-    buf[i++] = '-';
-
   while (--i >= 0)
     consputc(buf[i]);
+}
+
+static void
+printsigned(long long value, int base)
+{
+  unsigned long long magnitude = value;
+
+  if (value < 0) {
+    consputc('-');
+    magnitude = 0 - magnitude;
+  }
+  printunsigned(magnitude, base);
 }
 
 static void
@@ -85,33 +90,33 @@ printk(char *fmt, ...)
     if (c1)
       c2 = fmt[i + 2] & 0xff;
     if (c0 == 'd') {
-      printint(va_arg(ap, int), 10, 1);
+      printsigned(va_arg(ap, int), 10);
     } else if (c0 == 'l' && c1 == 'd') {
-      printint(va_arg(ap, uint64), 10, 1);
+      printsigned(va_arg(ap, long), 10);
       i += 1;
     } else if (c0 == 'l' && c1 == 'l' && c2 == 'd') {
-      printint(va_arg(ap, uint64), 10, 1);
+      printsigned(va_arg(ap, long long), 10);
       i += 2;
     } else if (c0 == 'u') {
-      printint(va_arg(ap, uint32), 10, 0);
+      printunsigned(va_arg(ap, unsigned int), 10);
     } else if (c0 == 'l' && c1 == 'u') {
-      printint(va_arg(ap, uint64), 10, 0);
+      printunsigned(va_arg(ap, unsigned long), 10);
       i += 1;
     } else if (c0 == 'l' && c1 == 'l' && c2 == 'u') {
-      printint(va_arg(ap, uint64), 10, 0);
+      printunsigned(va_arg(ap, unsigned long long), 10);
       i += 2;
     } else if (c0 == 'x') {
-      printint(va_arg(ap, uint32), 16, 0);
+      printunsigned(va_arg(ap, unsigned int), 16);
     } else if (c0 == 'l' && c1 == 'x') {
-      printint(va_arg(ap, uint64), 16, 0);
+      printunsigned(va_arg(ap, unsigned long), 16);
       i += 1;
     } else if (c0 == 'l' && c1 == 'l' && c2 == 'x') {
-      printint(va_arg(ap, uint64), 16, 0);
+      printunsigned(va_arg(ap, unsigned long long), 16);
       i += 2;
     } else if (c0 == 'p') {
-      printptr(va_arg(ap, uint64));
+      printptr((uint64)va_arg(ap, void *));
     } else if (c0 == 'c') {
-      consputc(va_arg(ap, uint));
+      consputc(va_arg(ap, int));
     } else if (c0 == 's') {
       if ((s = va_arg(ap, char *)) == 0)
         s = "(null)";
