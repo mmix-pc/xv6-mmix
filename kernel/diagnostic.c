@@ -71,6 +71,12 @@ diagnostic_boot(const struct mmix_boot_state *boot)
   if (boot->bootinfo_status != MMIX_BOOTINFO_OK)
     return;
 
+  diagnostic_puts("ram: [");
+  diagnostic_put_hex64(info->ram_base);
+  diagnostic_puts(", ");
+  diagnostic_put_hex64(info->ram_base + info->ram_size);
+  diagnostic_puts(")\n");
+
   diagnostic_puts("low ram: [");
   diagnostic_put_hex64(info->low_ram_base);
   diagnostic_puts(", ");

@@ -4,6 +4,7 @@
 
 #include "mmix.h"
 #include "param.h"
+#include "boot.h"
 #include "kalloc.h"
 #include "spinlock.h"
 #include "defs.h"
@@ -37,9 +38,16 @@ static struct {
 
 _Static_assert((100 * 1024 * 1024) % PGSIZE == 0,
                "eager allocation budget must use whole pages");
-_Static_assert((KALLOC_EXTENDED_LIMIT - KALLOC_EXTENDED_START) / PGSIZE >=
-                 KALLOC_EAGER_BUDGET_PAGES,
-               "extended RAM must contain the eager allocation budget");
+_Static_assert(KALLOC_RECLAIMED_PAGES >= KALLOC_EAGER_BUDGET_PAGES,
+               "minimum general memory must contain the eager budget");
+
+static uint64
+extended_limit(void)
+{
+  uint64 ram_end = boot_ram_end();
+
+  return ram_end > KALLOC_EXTENDED_START ? ram_end : KALLOC_EXTENDED_START;
+}
 
 static int
 page_zone(uint64 address)
@@ -53,7 +61,7 @@ page_zone(uint64 address)
   if (address >= KALLOC_RECLAIMED_START &&
       address < KALLOC_RECLAIMED_LIMIT)
     return KALLOC_RECLAIMED_ZONE;
-  if (address >= KALLOC_EXTENDED_START && address < KALLOC_EXTENDED_LIMIT)
+  if (address >= KALLOC_EXTENDED_START && address < extended_limit())
     return KALLOC_EXTENDED_ZONE;
   return -1;
 }
@@ -62,18 +70,26 @@ static void
 publish_zone(int zone, uint64 start, uint64 limit, int *ready,
              char *panic_message, char *repeat_message)
 {
-  uint64 expected = (limit - start) / PGSIZE;
+  uint64 expected;
 
-  if (start >= limit || (start & (PGSIZE - 1)) != 0 ||
-      (limit & (PGSIZE - 1)) != 0 || page_zone(start) != zone ||
-      page_zone(limit - PGSIZE) != zone)
+  if (start > limit || (start & (PGSIZE - 1)) != 0 ||
+      (limit & (PGSIZE - 1)) != 0 ||
+      (start != limit &&
+       (page_zone(start) != zone || page_zone(limit - PGSIZE) != zone)))
     panic(panic_message);
+  expected = (limit - start) / PGSIZE;
 
   acquire(&kmem.lock);
   if (*ready || kmem.zone[zone].freelist != 0 ||
       kmem.zone[zone].free_pages != 0) {
     release(&kmem.lock);
     panic(repeat_message);
+  }
+
+  if (start == limit) {
+    *ready = 1;
+    release(&kmem.lock);
+    return;
   }
 
   // Newly published pages have no dangling references. Link them directly
@@ -129,11 +145,13 @@ kinit_reclaimed(void)
 void
 kinit_extended(void)
 {
+  uint64 limit = extended_limit();
+
   if (mmix_rv_read() != MMIX_KERNEL_RV)
     panic("kinit extended");
 
   publish_zone(KALLOC_EXTENDED_ZONE, KALLOC_EXTENDED_START,
-               KALLOC_EXTENDED_LIMIT, &kmem.extended_ready,
+               limit, &kmem.extended_ready,
                "kinit extended", "kinit extended twice");
 }
 
@@ -297,7 +315,7 @@ kalloc_contiguous(uint count)
   if (kmem.extended_ready)
     base = alloc_contiguous_from_zone(&kmem.zone[KALLOC_EXTENDED_ZONE],
                                       KALLOC_EXTENDED_START,
-                                      KALLOC_EXTENDED_LIMIT, count);
+                                      extended_limit(), count);
   if (base == 0 && kmem.reclaimed_ready)
     base = alloc_contiguous_from_zone(&kmem.zone[KALLOC_RECLAIMED_ZONE],
                                       STACK_PHYS_BASE, STACK_PHYS_END,

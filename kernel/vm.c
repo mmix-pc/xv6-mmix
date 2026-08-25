@@ -1,4 +1,5 @@
 #include "mmix.h"
+#include "boot.h"
 #include "defs.h"
 #include "diagnostic.h"
 #include "kalloc.h"
@@ -10,18 +11,10 @@
 #define MMIX_KERNEL_LOW_CHILDREN     (LOW_RAM_END / MMIX_PT_LEVEL1_SPAN - 1)
 #define MMIX_KERNEL_BARE_CHILDREN                                         \
   (BARE_SEGMENT_BACKING_SIZE / MMIX_PT_LEVEL1_SPAN)
-#define MMIX_KERNEL_UPPER_CHILDREN                                      \
-  ((RAM_MANAGED_END - MMIO_BASE) / MMIX_PT_LEVEL1_SPAN)
-#define MMIX_KERNEL_CHILD_TABLES                                        \
-  (MMIX_KERNEL_LOW_CHILDREN + MMIX_KERNEL_BARE_CHILDREN +               \
-   MMIX_KERNEL_UPPER_CHILDREN)
-#define MMIX_KERNEL_DEVICE_MAP_END (INTC_BASE + INTC_SIZE)
 
 extern char kernel_text_end[];
 extern char kernel_rodata_end[];
 extern char kernel_end[];
-struct mmix_boot_state;
-extern struct mmix_boot_state mmix_boot;
 
 static struct mmix_pagetable kernel_table;
 pagetable_t kernel_pagetable = &kernel_table;
@@ -33,13 +26,29 @@ _Static_assert((BARE_SEGMENT_BACKING_BASE % MMIX_PT_LEVEL1_SPAN) == 0 &&
                  MMIX_KERNEL_BARE_CHILDREN == 17,
                "bare-segment backing must cover 17 level-1 spans");
 _Static_assert((MMIO_BASE % MMIX_PT_LEVEL1_SPAN) == 0 &&
-                 (RAM_MANAGED_END % MMIX_PT_LEVEL1_SPAN) == 0,
-               "upper kernel map must use complete level-1 spans");
-_Static_assert(MMIX_KERNEL_CHILD_TABLES == 60,
-               "kernel identity map must use 60 child tables");
+                 KERNEL_IDENTITY_LIMIT ==
+                   (uint64)MMIX_PT_LEVEL1_SPAN * MMIX_PT_ENTRIES,
+               "upper kernel map must fit the level-1 root");
 _Static_assert(UART0_BASE / MMIX_PT_LEVEL1_SPAN ==
-                 (MMIX_KERNEL_DEVICE_MAP_END - 1) / MMIX_PT_LEVEL1_SPAN,
+                 (MMIO_ENVELOPE_END - 1) / MMIX_PT_LEVEL1_SPAN,
                "kernel devices must share one level-1 child table");
+
+static uint64
+kernel_map_end(void)
+{
+  uint64 ram_end = boot_ram_end();
+
+  return ram_end > MMIO_ENVELOPE_END ? ram_end : MMIO_ENVELOPE_END;
+}
+
+static uint
+kernel_child_tables(uint64 map_end)
+{
+  uint64 upper = map_end - MMIO_BASE;
+
+  return MMIX_KERNEL_LOW_CHILDREN + MMIX_KERNEL_BARE_CHILDREN +
+         (upper + MMIX_PT_LEVEL1_SPAN - 1) / MMIX_PT_LEVEL1_SPAN;
+}
 
 enum walk_status {
   WALK_OK,
@@ -806,7 +815,7 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 }
 
 static pte_t
-kernel_expected_entry(uint64 va)
+kernel_expected_entry(uint64 va, uint64 map_end)
 {
   uint64 text_end = (uint64)kernel_text_end;
   uint64 rodata_end = (uint64)kernel_rodata_end;
@@ -823,7 +832,7 @@ kernel_expected_entry(uint64 va)
   else if (va >= BARE_SEGMENT_BACKING_BASE &&
            va < BARE_SEGMENT_BACKING_LIMIT)
     permissions = PTE_R | PTE_W;
-  else if (va >= UART0_BASE && va < RAM_MANAGED_END)
+  else if (va >= UART0_BASE && va < map_end)
     permissions = PTE_R | PTE_W;
   else
     return 0;
@@ -832,7 +841,7 @@ kernel_expected_entry(uint64 va)
 }
 
 static int
-level1_child_required(uint64 index)
+level1_child_required(uint64 index, uint64 map_end)
 {
   uint64 base;
   uint64 limit;
@@ -844,22 +853,18 @@ level1_child_required(uint64 index)
   return (base < LOW_RAM_END && limit > REGISTER_STACK_BASE) ||
          (base < BARE_SEGMENT_BACKING_LIMIT &&
           limit > BARE_SEGMENT_BACKING_BASE) ||
-         (base < RAM_MANAGED_END && limit > UART0_BASE);
+         (base < map_end && limit > UART0_BASE);
 }
 
 static int
-record_child(pagetable_t pagetable, pte_t pointer, uint64 *children,
-             uint *count)
+child_pointer_valid(pagetable_t pagetable, pte_t pointer, pte_t *root,
+                    uint index)
 {
-  uint64 child_pa;
-
-  if (!ptp_valid(pagetable, pointer) || *count >= MMIX_KERNEL_CHILD_TABLES)
+  if (!ptp_valid(pagetable, pointer))
     return -1;
-  child_pa = mmix_ptp_child_pa(pointer);
-  for (uint index = 0; index < *count; index++)
-    if (children[index] == child_pa)
+  for (uint prior = 0; prior < index; prior++)
+    if (root[prior] == pointer)
       return -1;
-  children[(*count)++] = child_pa;
   return 0;
 }
 
@@ -899,8 +904,10 @@ require_identity_permissions(pagetable_t pagetable, uint64 va,
 static int
 kernel_pagetable_audit(pagetable_t pagetable)
 {
-  uint64 children[MMIX_KERNEL_CHILD_TABLES];
   uint child_count = 0;
+  uint expected_children;
+  uint64 map_end = kernel_map_end();
+  uint64 ram_end = boot_ram_end();
   uint64 root_pa;
   pte_t *direct_root;
   pte_t *level1_root;
@@ -909,8 +916,9 @@ kernel_pagetable_audit(pagetable_t pagetable)
   uint64 rs;
   uint64 first_free = KALLOC_START((uint64)kernel_end);
 
-  if (!pagetable_valid(pagetable))
+  if (!pagetable_valid(pagetable) || map_end > KERNEL_IDENTITY_LIMIT)
     return -1;
+  expected_children = kernel_child_tables(map_end);
   root_pa = MMIX_RV_ROOT_PA(pagetable->rv);
   direct_root = table_address(root_pa);
   level1_root = table_address(root_pa + PGSIZE);
@@ -918,24 +926,33 @@ kernel_pagetable_audit(pagetable_t pagetable)
 
   for (uint index = 0; index < MMIX_PT_ENTRIES; index++) {
     uint64 va = (uint64)index * PGSIZE;
-    if (direct_root[index] != kernel_expected_entry(va))
+    if (direct_root[index] != kernel_expected_entry(va, map_end))
       return -1;
   }
 
   for (uint index = 0; index < MMIX_PT_ENTRIES; index++) {
     pte_t pointer = level1_root[index];
 
-    if (!level1_child_required(index)) {
+    if (!level1_child_required(index, map_end)) {
       if (pointer != 0)
         return -1;
       continue;
     }
-    if (record_child(pagetable, pointer, children, &child_count) < 0)
+    if (child_pointer_valid(pagetable, pointer, level1_root, index) < 0)
       return -1;
-    pte_t *child = table_address(mmix_ptp_child_pa(pointer));
+    uint64 child_pa = mmix_ptp_child_pa(pointer);
+    uint64 alias = mmix_phys_alias(child_pa);
+    pte_t *child = table_address(child_pa);
+
+    if ((alias & MMIX_PHYSICAL_ALIAS_BIT) == 0 ||
+        (alias & ~MMIX_PHYSICAL_ALIAS_BIT) != child_pa ||
+        require_identity(pagetable, child_pa, PTE_R | PTE_W) < 0 ||
+        require_unmapped(pagetable, alias) < 0)
+      return -1;
+    child_count++;
     for (uint leaf = 0; leaf < MMIX_PT_ENTRIES; leaf++) {
       uint64 va = index * MMIX_PT_LEVEL1_SPAN + (uint64)leaf * PGSIZE;
-      if (child[leaf] != kernel_expected_entry(va))
+      if (child[leaf] != kernel_expected_entry(va, map_end))
         return -1;
     }
   }
@@ -943,17 +960,8 @@ kernel_pagetable_audit(pagetable_t pagetable)
   for (uint index = 0; index < MMIX_PT_ENTRIES; index++)
     if (level2_root[index] != 0)
       return -1;
-  if (child_count != MMIX_KERNEL_CHILD_TABLES)
+  if (child_count != expected_children)
     return -1;
-
-  for (uint index = 0; index < child_count; index++) {
-    uint64 alias = mmix_phys_alias(children[index]);
-    if ((alias & MMIX_PHYSICAL_ALIAS_BIT) == 0 ||
-        (alias & ~MMIX_PHYSICAL_ALIAS_BIT) != children[index] ||
-        require_identity(pagetable, children[index], PTE_R | PTE_W) < 0 ||
-        require_unmapped(pagetable, alias) < 0)
-      return -1;
-  }
 
   ro = mmix_ro_read();
   rs = mmix_rs_read();
@@ -963,7 +971,7 @@ kernel_pagetable_audit(pagetable_t pagetable)
       require_identity(pagetable, rs, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, (uint64)kvminit, PTE_R | PTE_X) < 0 ||
       require_identity(pagetable, (uint64)kvminithart, PTE_R | PTE_X) < 0 ||
-      require_identity(pagetable, (uint64)&children, PTE_R | PTE_W) < 0 ||
+      require_identity(pagetable, (uint64)&child_count, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, (uint64)&mmix_boot, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, (uint64)&kernel_pagetable, PTE_R | PTE_W) <
         0 ||
@@ -987,10 +995,15 @@ kernel_pagetable_audit(pagetable_t pagetable)
       require_identity(pagetable, VIRTIO0_BASE, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, TIMER_BASE, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, INTC_BASE + INTC_SIZE - 1,
-                       PTE_R | PTE_W) < 0 ||
-      require_identity(pagetable, KALLOC_EXTENDED_START, PTE_R | PTE_W) < 0 ||
-      require_identity(pagetable, KALLOC_EXTENDED_LIMIT - PGSIZE,
                        PTE_R | PTE_W) < 0)
+    return -1;
+
+  if ((ram_end > KALLOC_EXTENDED_START &&
+       (require_identity(pagetable, KALLOC_EXTENDED_START,
+                         PTE_R | PTE_W) < 0 ||
+        require_identity(pagetable, ram_end - PGSIZE, PTE_R | PTE_W) < 0)) ||
+      (ram_end <= KALLOC_EXTENDED_START &&
+       require_unmapped(pagetable, KALLOC_EXTENDED_START) < 0))
     return -1;
 
   if (require_identity(pagetable, KERNEL_LOAD, PTE_R | PTE_X) < 0 ||
@@ -1013,7 +1026,7 @@ kernel_pagetable_audit(pagetable_t pagetable)
       require_unmapped(pagetable, BOOTINFO_BASE) < 0 ||
       require_unmapped(pagetable, FRAMEBUFFER_BASE) < 0 ||
       require_unmapped(pagetable, FRAMEBUFFER_END - PGSIZE) < 0 ||
-      require_unmapped(pagetable, RAM_MANAGED_END) < 0 ||
+      require_unmapped(pagetable, map_end) < 0 ||
       require_unmapped(pagetable, MMIX_SEGMENT0_LIMIT - PGSIZE) < 0 ||
       require_unmapped(pagetable, POOL_LOGICAL_BASE) < 0 ||
       require_unmapped(pagetable, DATA_LOGICAL_BASE) < 0 ||
@@ -1028,6 +1041,9 @@ kvminit(void)
 {
   uint64 text_end = (uint64)kernel_text_end;
   uint64 rodata_end = (uint64)kernel_rodata_end;
+  uint64 map_end = kernel_map_end();
+  uint64 ram_end = boot_ram_end();
+  uint expected_children = kernel_child_tables(map_end);
   uint64 free_before = kalloc_free_pages();
   uint64 free_after;
 
@@ -1039,7 +1055,9 @@ kvminit(void)
       KERNEL_ROOT_LIMIT > REGISTER_STACK_BASE || text_end <= KERNEL_LOAD ||
       (text_end & (PGSIZE - 1)) != 0 || rodata_end < text_end ||
       (rodata_end & (PGSIZE - 1)) != 0 || rodata_end > (uint64)kernel_end ||
-      (uint64)kernel_end > KALLOC_LOW_LIMIT)
+      (uint64)kernel_end > KALLOC_LOW_LIMIT ||
+      ram_end < RAM_MINIMUM_SIZE || ram_end > KERNEL_IDENTITY_LIMIT ||
+      (ram_end & (PGSIZE - 1)) != 0 || map_end > KERNEL_IDENTITY_LIMIT)
     panic("kvminit layout");
 
   kernel_table.rv = MMIX_KERNEL_RV;
@@ -1058,14 +1076,14 @@ kvminit(void)
       mappages(kernel_pagetable, BARE_SEGMENT_BACKING_BASE,
                BARE_SEGMENT_BACKING_SIZE, BARE_SEGMENT_BACKING_BASE,
                PTE_R | PTE_W) < 0 ||
-      mappages(kernel_pagetable, UART0_BASE, RAM_MANAGED_END - UART0_BASE,
+      mappages(kernel_pagetable, UART0_BASE, map_end - UART0_BASE,
                UART0_BASE,
                PTE_R | PTE_W) < 0)
     panic("kvminit map");
 
   free_after = kalloc_free_pages();
   if (free_before < free_after ||
-      free_before - free_after != MMIX_KERNEL_CHILD_TABLES)
+      free_before - free_after != expected_children)
     panic("kvminit tables");
   if (kernel_pagetable_audit(kernel_pagetable) < 0)
     panic("kvminit audit");

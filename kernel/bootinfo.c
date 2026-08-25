@@ -30,9 +30,18 @@ load_be_octa(const volatile uint8 *wire, enum mmix_bootinfo_field field)
 static __attribute__((always_inline)) inline int
 valid_memory_layout(const struct mmix_bootinfo *info)
 {
-  if (info->ram_base != LOW_RAM_BASE || info->ram_size < RAM_REQUIRED_SIZE ||
+  uint64 ram_end;
+
+  if (info->ram_base != LOW_RAM_BASE || info->ram_size < RAM_MINIMUM_SIZE ||
+      (info->ram_size & (MMIX_PAGE_SIZE - 1)) != 0 ||
+      info->ram_size > ~info->ram_base)
+    return 0;
+  ram_end = info->ram_base + info->ram_size;
+  if (ram_end > KERNEL_IDENTITY_LIMIT ||
       !range_contains(info->ram_base, info->ram_size, BOOTINFO_BASE,
-                      BOOTINFO_SIZE))
+                      BOOTINFO_SIZE) ||
+      !range_contains(info->ram_base, info->ram_size, FRAMEBUFFER_BASE,
+                      FRAMEBUFFER_SIZE))
     return 0;
 
   if (info->low_ram_base != LOW_RAM_BASE ||

@@ -16,7 +16,7 @@
 //                      | Platform RAM (8 MiB; boot info)  |
 //   0x000000000f000000 +----------------------------------+
 //                      | Framebuffer backing (16 MiB)     |
-//   0x0000000010000000 +----------------------------------+
+//   0x0000000010000000 +----------------------------------+ minimum RAM end
 //                      | UART MMIO and reserved gaps      |
 //   0x0000000010001000 +----------------------------------+
 //                      | VirtIO MMIO (4 KiB)              |
@@ -27,8 +27,8 @@
 //   0x0000000010004000 +----------------------------------+
 //                      | INTC MMIO (8 KiB)                |
 //   0x0000000010006000 +----------------------------------+
-//                      | Extended RAM                     |
-//   0x0000000020000000 +----------------------------------+ managed RAM end
+//                      | Optional Extended RAM            |
+//     larger RAM's end +----------------------------------+
 #define LOW_RAM_BASE 0x0000000000000000
 #define LOW_RAM_SIZE 0x0000000006000000
 #define LOW_RAM_END (LOW_RAM_BASE + LOW_RAM_SIZE)
@@ -97,13 +97,13 @@
 #define INTC_SHARED_IRQ_LAST 15
 #define INTC_CONTEXT_COUNT 16
 
-// The kernel requires 512 MiB of machine RAM but deliberately manages no
-// memory beyond this fixed limit. The MMIO pages below EXTENDED_RAM_BASE
-// remain reserved even though QEMU exposes RAM underneath gaps between devices.
-#define RAM_REQUIRED_SIZE 0x0000000020000000
-#define RAM_MANAGED_END (LOW_RAM_BASE + RAM_REQUIRED_SIZE)
+// Physical RAM must contain the fixed platform layout through the framebuffer.
+// Device mappings extend beyond that minimum independently of physical RAM.
+#define RAM_MINIMUM_SIZE 0x0000000010000000
+// The current kernel table construction uses the level-1 root directly.
+#define KERNEL_IDENTITY_LIMIT 0x0000000200000000
 #define EXTENDED_RAM_BASE (INTC_BASE + INTC_SIZE)
-#define EXTENDED_RAM_END RAM_MANAGED_END
+#define MMIO_ENVELOPE_END EXTENDED_RAM_BASE
 
 // The current kernel configuration is single-CPU.
 #define BOOT_CPU_COUNT 1
@@ -171,16 +171,18 @@
 //   0x000000000e800000 +----------------------------------+
 //                      | Unmapped platform/framebuffer    |
 //   0x0000000010000000 +----------------------------------+
-//                      | Identity MMIO and Extended RAM   |
-//   0x0000000020000000 +----------------------------------+
+//                      | Identity MMIO envelope           |
+//   0x0000000010006000 +----------------------------------+
+//                      | Optional identity Extended RAM   |
+//          runtime end +----------------------------------+
 //                      | Unmapped                         |
 //   0x000007ffffd76000 +----------------------------------+
 //                      | 65 kernel context slots          |
 //   0x0000080000000000 +----------------------------------+
 //                      | Unmapped                         |
 //   0x8000000000000000 +----------------------------------+
-//                      | Direct aliases of managed memory |
-//   0x8000000020000000 +----------------------------------+
+//                      | Direct aliases of physical RAM   |
+//    runtime alias end +----------------------------------+
 //
 // Slot 0 belongs to the scheduler; slots 1 through 64 correspond to
 // proc[0..63]. Each slot has two mapped pages separated and bounded by guards.
@@ -268,7 +270,6 @@
 #define KALLOC_RECLAIMED_PAGES                                      \
   ((KALLOC_RECLAIMED_LIMIT - KALLOC_RECLAIMED_START) / MMIX_PAGE_SIZE)
 #define KALLOC_EXTENDED_START EXTENDED_RAM_BASE
-#define KALLOC_EXTENDED_LIMIT EXTENDED_RAM_END
 
 #if !defined(__ASSEMBLER__)
 _Static_assert((MMIX_PAGE_SIZE & (MMIX_PAGE_SIZE - 1)) == 0,
@@ -321,12 +322,13 @@ _Static_assert(TIMER_BASE + TIMER_SIZE <= INTC_BASE,
                "timer MMIO range must not overlap the interrupt controller");
 _Static_assert(INTC_BASE + INTC_SIZE == EXTENDED_RAM_BASE,
                "extended RAM must follow the MMIO envelope");
-_Static_assert((RAM_REQUIRED_SIZE & (MMIX_PAGE_SIZE - 1)) == 0 &&
-                   RAM_MANAGED_END == 0x0000000020000000,
-               "the kernel must manage exactly 512 MiB of machine RAM");
-_Static_assert((EXTENDED_RAM_BASE & (MMIX_PAGE_SIZE - 1)) == 0 &&
-                   EXTENDED_RAM_BASE < EXTENDED_RAM_END,
-               "extended RAM must be a non-empty page-aligned interval");
+_Static_assert(RAM_MINIMUM_SIZE == FRAMEBUFFER_END &&
+                   (RAM_MINIMUM_SIZE & (MMIX_PAGE_SIZE - 1)) == 0,
+               "minimum RAM must contain the fixed physical platform");
+_Static_assert((MMIO_ENVELOPE_END & (MMIX_PAGE_SIZE - 1)) == 0 &&
+                   MMIO_ENVELOPE_END > RAM_MINIMUM_SIZE &&
+                   MMIO_ENVELOPE_END < KERNEL_IDENTITY_LIMIT,
+               "device envelope must be page-aligned and reachable");
 
 _Static_assert((KERNEL_LOAD & (MMIX_PAGE_SIZE - 1)) == 0,
                "kernel load address must be page-aligned");
@@ -391,9 +393,8 @@ _Static_assert(KALLOC_RECLAIMED_START == POOL_PHYS_BASE &&
                    KALLOC_RECLAIMED_LIMIT == STACK_PHYS_END &&
                    KALLOC_RECLAIMED_PAGES == 17408,
                "reclaimed allocator range must cover the bare segments");
-_Static_assert(KALLOC_EXTENDED_START == EXTENDED_RAM_BASE &&
-                   KALLOC_EXTENDED_LIMIT == RAM_MANAGED_END,
-               "extended allocator range must match the managed RAM tail");
+_Static_assert(KALLOC_EXTENDED_START == MMIO_ENVELOPE_END,
+               "extended allocation must start after the device envelope");
 #endif
 
 #endif
