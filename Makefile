@@ -74,9 +74,11 @@ $K/kernel: $(OBJS) $K/kernel.ld
 $K/%.o: $K/%.S
 	$(CC) $(ASFLAGS) -c -o $@ $<
 
+QEMUMEM ?= 256M
+
 QEMUOPTS = -machine virt
 QEMUOPTS += -smp 1
-QEMUOPTS += -m 512M
+QEMUOPTS += -m $(QEMUMEM)
 QEMUOPTS += -display none
 QEMUOPTS += -serial stdio
 QEMUOPTS += -monitor none
