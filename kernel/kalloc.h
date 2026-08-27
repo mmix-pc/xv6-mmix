@@ -6,6 +6,7 @@ void *kalloc_contiguous(uint count);
 void *kalloc_dma(void);
 void kfree(void *pa);
 void kinit(void);
+void kinit_high(void);
 void kinit_reclaimed(void);
 
 uint64 kalloc_free_pages(void);

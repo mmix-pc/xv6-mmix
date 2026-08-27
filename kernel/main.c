@@ -21,6 +21,7 @@ main(void)
   kvminit();          // create kernel page table
   kvminithart();      // turn on paging
   kinit_reclaimed();  // add mapped Pool, Data, and Stack backing
+  kinit_high();       // add optional mapped High RAM
   kcontext_init();
   procinit();         // process table
   trapinit();         // trap vectors
