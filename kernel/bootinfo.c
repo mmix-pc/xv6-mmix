@@ -28,45 +28,49 @@ load_be_octa(const volatile uint8 *wire, enum mmix_bootinfo_field field)
 }
 
 static __attribute__((always_inline)) inline int
-valid_memory_layout(const struct mmix_bootinfo *info)
+valid_memory_layout(const struct mmix_bootinfo *info, uint64 ram_base,
+                    uint64 ram_size, uint64 high_ram_base,
+                    uint64 high_ram_size)
 {
-  uint64 ram_end;
-
-  if (info->ram_base != LOW_RAM_BASE || info->ram_size < RAM_MINIMUM_SIZE ||
-      (info->ram_size & (MMIX_PAGE_SIZE - 1)) != 0 ||
-      info->ram_size > ~info->ram_base)
+  if (ram_base != PHYSICAL_LOW_RAM_BASE || ram_size < RAM_MINIMUM_SIZE ||
+      (ram_size & (MMIX_PAGE_SIZE - 1)) != 0)
     return 0;
-  ram_end = info->ram_base + info->ram_size;
-  if (ram_end > KERNEL_IDENTITY_LIMIT ||
-      !range_contains(info->ram_base, info->ram_size, BOOTINFO_BASE,
-                      BOOTINFO_SIZE) ||
-      !range_contains(info->ram_base, info->ram_size, FRAMEBUFFER_BASE,
-                      FRAMEBUFFER_SIZE))
+  if (high_ram_size != ram_size - PHYSICAL_LOW_RAM_SIZE ||
+      (high_ram_size == 0 && high_ram_base != 0) ||
+      (high_ram_size != 0 &&
+       (high_ram_base != PHYSICAL_HIGH_RAM_BASE ||
+        (high_ram_size & (MMIX_PAGE_SIZE - 1)) != 0 ||
+        high_ram_size > ~high_ram_base ||
+        high_ram_base + high_ram_size > KERNEL_IDENTITY_LIMIT)))
     return 0;
 
   if (info->low_ram_base != LOW_RAM_BASE ||
       info->low_ram_size != LOW_RAM_SIZE ||
-      !range_contains(info->ram_base, info->ram_size, info->low_ram_base,
-                      info->low_ram_size))
+      !range_contains(PHYSICAL_LOW_RAM_BASE, PHYSICAL_LOW_RAM_SIZE,
+                      info->low_ram_base, info->low_ram_size))
     return 0;
 
   if (info->pool_logical_base != POOL_LOGICAL_BASE ||
       info->pool_phys_base != POOL_PHYS_BASE || info->pool_size != POOL_SIZE ||
-      !range_contains(info->ram_base, info->ram_size, info->pool_phys_base,
-                      info->pool_size))
+      !range_contains(PHYSICAL_LOW_RAM_BASE, PHYSICAL_LOW_RAM_SIZE,
+                      info->pool_phys_base, info->pool_size))
     return 0;
 
   if (info->data_logical_base != DATA_LOGICAL_BASE ||
       info->data_phys_base != DATA_PHYS_BASE || info->data_size != DATA_SIZE ||
-      !range_contains(info->ram_base, info->ram_size, info->data_phys_base,
-                      info->data_size))
+      !range_contains(PHYSICAL_LOW_RAM_BASE, PHYSICAL_LOW_RAM_SIZE,
+                      info->data_phys_base, info->data_size))
     return 0;
 
   if (info->stack_logical_base != STACK_LOGICAL_BASE ||
       info->stack_phys_base != STACK_PHYS_BASE ||
       info->stack_size != STACK_SIZE ||
-      !range_contains(info->ram_base, info->ram_size, info->stack_phys_base,
-                      info->stack_size))
+      !range_contains(PHYSICAL_LOW_RAM_BASE, PHYSICAL_LOW_RAM_SIZE,
+                      info->stack_phys_base, info->stack_size) ||
+      !range_contains(PHYSICAL_LOW_RAM_BASE, PHYSICAL_LOW_RAM_SIZE,
+                      BOOTINFO_BASE, BOOTINFO_SIZE) ||
+      !range_contains(PHYSICAL_LOW_RAM_BASE, PHYSICAL_LOW_RAM_SIZE,
+                      FRAMEBUFFER_BASE, FRAMEBUFFER_SIZE))
     return 0;
 
   return 1;
@@ -93,6 +97,10 @@ bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
   const volatile uint8 *wire;
   struct mmix_bootinfo info;
   uint64 declared_size;
+  uint64 ram_base;
+  uint64 ram_size;
+  uint64 high_ram_base;
+  uint64 high_ram_size;
 
   if (decoded == 0)
     return MMIX_BOOTINFO_BAD_ARGUMENT;
@@ -123,8 +131,8 @@ bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
       info.boot_cpu_id >= info.cpu_count || startup_cpu_id != BOOT_CPU_ID)
     return MMIX_BOOTINFO_BAD_CPU;
 
-  info.ram_base = load_be_octa(wire, MMIX_BOOTINFO_RAM_BASE_FIELD);
-  info.ram_size = load_be_octa(wire, MMIX_BOOTINFO_RAM_SIZE_FIELD);
+  ram_base = load_be_octa(wire, MMIX_BOOTINFO_RAM_BASE_FIELD);
+  ram_size = load_be_octa(wire, MMIX_BOOTINFO_RAM_SIZE_FIELD);
   info.low_ram_base = load_be_octa(wire, MMIX_BOOTINFO_LOW_RAM_BASE_FIELD);
   info.low_ram_size = load_be_octa(wire, MMIX_BOOTINFO_LOW_RAM_SIZE_FIELD);
   info.pool_logical_base =
@@ -142,7 +150,10 @@ bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
   info.stack_phys_base =
       load_be_octa(wire, MMIX_BOOTINFO_STACK_PHYS_BASE_FIELD);
   info.stack_size = load_be_octa(wire, MMIX_BOOTINFO_STACK_SIZE_FIELD);
-  if (!valid_memory_layout(&info))
+  high_ram_base = load_be_octa(wire, MMIX_BOOTINFO_HIGH_RAM_BASE_FIELD);
+  high_ram_size = load_be_octa(wire, MMIX_BOOTINFO_HIGH_RAM_SIZE_FIELD);
+  if (!valid_memory_layout(&info, ram_base, ram_size, high_ram_base,
+                           high_ram_size))
     return MMIX_BOOTINFO_BAD_MEMORY;
 
   info.mmio_base = load_be_octa(wire, MMIX_BOOTINFO_MMIO_BASE_FIELD);
@@ -168,8 +179,12 @@ bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
   // Keep this copy independent of compiler-generated freestanding memcpy.
   decoded->cpu_count = info.cpu_count;
   decoded->boot_cpu_id = info.boot_cpu_id;
-  decoded->ram_base = info.ram_base;
-  decoded->ram_size = info.ram_size;
+  decoded->memory.total_size = ram_size;
+  decoded->memory.range_count = high_ram_size == 0 ? 1 : 2;
+  decoded->memory.range[MMIX_PHYSICAL_RAM_LOW].base = PHYSICAL_LOW_RAM_BASE;
+  decoded->memory.range[MMIX_PHYSICAL_RAM_LOW].size = PHYSICAL_LOW_RAM_SIZE;
+  decoded->memory.range[MMIX_PHYSICAL_RAM_HIGH].base = high_ram_base;
+  decoded->memory.range[MMIX_PHYSICAL_RAM_HIGH].size = high_ram_size;
   decoded->low_ram_base = info.low_ram_base;
   decoded->low_ram_size = info.low_ram_size;
   decoded->pool_logical_base = info.pool_logical_base;

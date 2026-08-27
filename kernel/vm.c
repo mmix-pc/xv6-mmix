@@ -30,15 +30,13 @@ _Static_assert((MMIO_BASE % MMIX_PT_LEVEL1_SPAN) == 0 &&
                    (uint64)MMIX_PT_LEVEL1_SPAN * MMIX_PT_ENTRIES,
                "upper kernel map must fit the level-1 root");
 _Static_assert(UART0_BASE / MMIX_PT_LEVEL1_SPAN ==
-                 (MMIO_ENVELOPE_END - 1) / MMIX_PT_LEVEL1_SPAN,
+                 (MMIO_DEVICE_END - 1) / MMIX_PT_LEVEL1_SPAN,
                "kernel devices must share one level-1 child table");
 
 static uint64
 kernel_map_end(void)
 {
-  uint64 ram_end = boot_ram_end();
-
-  return ram_end > MMIO_ENVELOPE_END ? ram_end : MMIO_ENVELOPE_END;
+  return MMIO_DEVICE_END;
 }
 
 static uint
@@ -907,7 +905,6 @@ kernel_pagetable_audit(pagetable_t pagetable)
   uint child_count = 0;
   uint expected_children;
   uint64 map_end = kernel_map_end();
-  uint64 ram_end = boot_ram_end();
   uint64 root_pa;
   pte_t *direct_root;
   pte_t *level1_root;
@@ -998,14 +995,6 @@ kernel_pagetable_audit(pagetable_t pagetable)
                        PTE_R | PTE_W) < 0)
     return -1;
 
-  if ((ram_end > KALLOC_EXTENDED_START &&
-       (require_identity(pagetable, KALLOC_EXTENDED_START,
-                         PTE_R | PTE_W) < 0 ||
-        require_identity(pagetable, ram_end - PGSIZE, PTE_R | PTE_W) < 0)) ||
-      (ram_end <= KALLOC_EXTENDED_START &&
-       require_unmapped(pagetable, KALLOC_EXTENDED_START) < 0))
-    return -1;
-
   if (require_identity(pagetable, KERNEL_LOAD, PTE_R | PTE_X) < 0 ||
       mmix_pagetable_translate(pagetable, KERNEL_LOAD, PTE_W, &root_pa) == 0 ||
       ((uint64)kernel_text_end < (uint64)kernel_rodata_end &&
@@ -1027,6 +1016,7 @@ kernel_pagetable_audit(pagetable_t pagetable)
       require_unmapped(pagetable, FRAMEBUFFER_BASE) < 0 ||
       require_unmapped(pagetable, FRAMEBUFFER_END - PGSIZE) < 0 ||
       require_unmapped(pagetable, map_end) < 0 ||
+      require_unmapped(pagetable, PHYSICAL_HIGH_RAM_BASE) < 0 ||
       require_unmapped(pagetable, MMIX_SEGMENT0_LIMIT - PGSIZE) < 0 ||
       require_unmapped(pagetable, POOL_LOGICAL_BASE) < 0 ||
       require_unmapped(pagetable, DATA_LOGICAL_BASE) < 0 ||
@@ -1042,7 +1032,6 @@ kvminit(void)
   uint64 text_end = (uint64)kernel_text_end;
   uint64 rodata_end = (uint64)kernel_rodata_end;
   uint64 map_end = kernel_map_end();
-  uint64 ram_end = boot_ram_end();
   uint expected_children = kernel_child_tables(map_end);
   uint64 free_before = kalloc_free_pages();
   uint64 free_after;
@@ -1056,8 +1045,7 @@ kvminit(void)
       (text_end & (PGSIZE - 1)) != 0 || rodata_end < text_end ||
       (rodata_end & (PGSIZE - 1)) != 0 || rodata_end > (uint64)kernel_end ||
       (uint64)kernel_end > KALLOC_LOW_LIMIT ||
-      ram_end < RAM_MINIMUM_SIZE || ram_end > KERNEL_IDENTITY_LIMIT ||
-      (ram_end & (PGSIZE - 1)) != 0 || map_end > KERNEL_IDENTITY_LIMIT)
+      map_end > KERNEL_IDENTITY_LIMIT)
     panic("kvminit layout");
 
   kernel_table.rv = MMIX_KERNEL_RV;

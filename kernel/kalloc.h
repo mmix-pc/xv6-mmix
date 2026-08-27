@@ -7,7 +7,6 @@ void *kalloc_dma(void);
 void kfree(void *pa);
 void kinit(void);
 void kinit_reclaimed(void);
-void kinit_extended(void);
 
 uint64 kalloc_free_pages(void);
 int kalloc_page_is_managed(void *pa);

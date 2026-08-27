@@ -46,7 +46,14 @@ enum mmix_bootinfo_field {
   MMIX_BOOTINFO_FRAMEBUFFER_HEIGHT_FIELD = 35,
   MMIX_BOOTINFO_FRAMEBUFFER_STRIDE_FIELD = 36,
   MMIX_BOOTINFO_FRAMEBUFFER_FORMAT_FIELD = 37,
-  MMIX_BOOTINFO_FIELD_COUNT = 38,
+  MMIX_BOOTINFO_KERNEL_CMDLINE_ADDR_FIELD = 38,
+  MMIX_BOOTINFO_KERNEL_CMDLINE_SIZE_FIELD = 39,
+  MMIX_BOOTINFO_IPI_BASE_FIELD = 40,
+  MMIX_BOOTINFO_IPI_TARGET_COUNT_FIELD = 41,
+  MMIX_BOOTINFO_IPI_REQUEST_MASK_FIELD = 42,
+  MMIX_BOOTINFO_HIGH_RAM_BASE_FIELD = 43,
+  MMIX_BOOTINFO_HIGH_RAM_SIZE_FIELD = 44,
+  MMIX_BOOTINFO_FIELD_COUNT = 45,
 };
 
 #define MMIX_BOOTINFO_FIELD_OFFSET(field)                                   \
@@ -64,14 +71,30 @@ enum mmix_bootinfo_status {
   MMIX_BOOTINFO_BAD_DEVICE = -6,
 };
 
-// Decoded platform information used by early boot. Framebuffer fields are
-// omitted because the current xv6 boot path does not consume that device.
+struct mmix_physical_range {
+  uint64 base;
+  uint64 size;
+};
+
+enum mmix_physical_ram_range {
+  MMIX_PHYSICAL_RAM_LOW,
+  MMIX_PHYSICAL_RAM_HIGH,
+  MMIX_PHYSICAL_RAM_RANGE_COUNT,
+};
+
+struct mmix_physical_memory {
+  uint64 total_size;
+  uint64 range_count;
+  struct mmix_physical_range range[MMIX_PHYSICAL_RAM_RANGE_COUNT];
+};
+
+// Decoded platform information used by early boot. QEMU's RAM wire fields are
+// normalized into one kernel-owned physical topology.
 struct mmix_bootinfo {
   uint64 cpu_count;
   uint64 boot_cpu_id;
 
-  uint64 ram_base;
-  uint64 ram_size;
+  struct mmix_physical_memory memory;
   uint64 low_ram_base;
   uint64 low_ram_size;
 
@@ -116,10 +139,16 @@ _Static_assert(
     "unexpected VirtIO count offset");
 _Static_assert(
     MMIX_BOOTINFO_FIELD_OFFSET(MMIX_BOOTINFO_FRAMEBUFFER_FORMAT_FIELD) == 0x128,
-    "unexpected final version-1 field offset");
-_Static_assert(MMIX_BOOTINFO_FIELD_COUNT == 38,
+    "unexpected framebuffer format offset");
+_Static_assert(
+    MMIX_BOOTINFO_FIELD_OFFSET(MMIX_BOOTINFO_HIGH_RAM_BASE_FIELD) == 0x158,
+    "unexpected high RAM base offset");
+_Static_assert(
+    MMIX_BOOTINFO_FIELD_OFFSET(MMIX_BOOTINFO_HIGH_RAM_SIZE_FIELD) == 0x160,
+    "unexpected high RAM size offset");
+_Static_assert(MMIX_BOOTINFO_FIELD_COUNT == 45,
                "unexpected version-1 boot-info field count");
-_Static_assert(MMIX_BOOTINFO_MIN_SIZE == 0x130,
+_Static_assert(MMIX_BOOTINFO_MIN_SIZE == 0x168,
                "unexpected version-1 boot-info size");
 _Static_assert((MMIX_BOOTINFO_MIN_SIZE % MMIX_BOOTINFO_OCTA_SIZE) == 0,
                "boot-info size must be octa-aligned");

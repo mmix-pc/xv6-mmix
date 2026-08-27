@@ -4,7 +4,6 @@
 
 #include "mmix.h"
 #include "param.h"
-#include "boot.h"
 #include "kalloc.h"
 #include "spinlock.h"
 #include "defs.h"
@@ -24,7 +23,6 @@ struct kalloc_zone {
 enum {
   KALLOC_LOW_ZONE,
   KALLOC_RECLAIMED_ZONE,
-  KALLOC_EXTENDED_ZONE,
   KALLOC_ZONE_COUNT,
   KALLOC_EAGER_BUDGET_PAGES = 100 * 1024 * 1024 / PGSIZE,
 };
@@ -33,21 +31,12 @@ static struct {
   struct spinlock lock;
   struct kalloc_zone zone[KALLOC_ZONE_COUNT];
   int reclaimed_ready;
-  int extended_ready;
 } kmem;
 
 _Static_assert((100 * 1024 * 1024) % PGSIZE == 0,
                "eager allocation budget must use whole pages");
 _Static_assert(KALLOC_RECLAIMED_PAGES >= KALLOC_EAGER_BUDGET_PAGES,
                "minimum general memory must contain the eager budget");
-
-static uint64
-extended_limit(void)
-{
-  uint64 ram_end = boot_ram_end();
-
-  return ram_end > KALLOC_EXTENDED_START ? ram_end : KALLOC_EXTENDED_START;
-}
 
 static int
 page_zone(uint64 address)
@@ -61,8 +50,6 @@ page_zone(uint64 address)
   if (address >= KALLOC_RECLAIMED_START &&
       address < KALLOC_RECLAIMED_LIMIT)
     return KALLOC_RECLAIMED_ZONE;
-  if (address >= KALLOC_EXTENDED_START && address < extended_limit())
-    return KALLOC_EXTENDED_ZONE;
   return -1;
 }
 
@@ -142,19 +129,6 @@ kinit_reclaimed(void)
                "kinit reclaimed", "kinit reclaimed twice");
 }
 
-void
-kinit_extended(void)
-{
-  uint64 limit = extended_limit();
-
-  if (mmix_rv_read() != MMIX_KERNEL_RV)
-    panic("kinit extended");
-
-  publish_zone(KALLOC_EXTENDED_ZONE, KALLOC_EXTENDED_START,
-               limit, &kmem.extended_ready,
-               "kinit extended", "kinit extended twice");
-}
-
 int
 kalloc_page_is_managed(void *pa)
 {
@@ -163,8 +137,7 @@ kalloc_page_is_managed(void *pa)
 
   acquire(&kmem.lock);
   managed = zone == KALLOC_LOW_ZONE ||
-            (zone == KALLOC_RECLAIMED_ZONE && kmem.reclaimed_ready) ||
-            (zone == KALLOC_EXTENDED_ZONE && kmem.extended_ready);
+            (zone == KALLOC_RECLAIMED_ZONE && kmem.reclaimed_ready);
   release(&kmem.lock);
   return managed;
 }
@@ -189,8 +162,7 @@ kfree(void *pa)
     panic("kfree");
 
   acquire(&kmem.lock);
-  if ((zone == KALLOC_RECLAIMED_ZONE && !kmem.reclaimed_ready) ||
-      (zone == KALLOC_EXTENDED_ZONE && !kmem.extended_ready)) {
+  if (zone == KALLOC_RECLAIMED_ZONE && !kmem.reclaimed_ready) {
     release(&kmem.lock);
     panic("kfree unpublished");
   }
@@ -225,12 +197,10 @@ kalloc_from(int dma_only)
   struct run *r;
 
   acquire(&kmem.lock);
-  if (!dma_only && kmem.extended_ready)
-    r = alloc_from_zone(&kmem.zone[KALLOC_EXTENDED_ZONE]);
+  if (!dma_only && kmem.reclaimed_ready)
+    r = alloc_from_zone(&kmem.zone[KALLOC_RECLAIMED_ZONE]);
   else
     r = 0;
-  if (!dma_only && r == 0 && kmem.reclaimed_ready)
-    r = alloc_from_zone(&kmem.zone[KALLOC_RECLAIMED_ZONE]);
   if (r == 0)
     r = alloc_from_zone(&kmem.zone[KALLOC_LOW_ZONE]);
   release(&kmem.lock);
@@ -240,8 +210,8 @@ kalloc_from(int dma_only)
   return (void *)r;
 }
 
-// Allocate one 8192-byte MMIX physical page. Prefer Extended RAM, then the
-// reclaimed bare-segment backing, and finally Low RAM.
+// Allocate one 8192-byte MMIX physical page. Prefer reclaimed bare-segment
+// backing, then Low RAM.
 void *
 kalloc(void)
 {
@@ -312,11 +282,7 @@ kalloc_contiguous(uint count)
     return 0;
 
   acquire(&kmem.lock);
-  if (kmem.extended_ready)
-    base = alloc_contiguous_from_zone(&kmem.zone[KALLOC_EXTENDED_ZONE],
-                                      KALLOC_EXTENDED_START,
-                                      extended_limit(), count);
-  if (base == 0 && kmem.reclaimed_ready)
+  if (kmem.reclaimed_ready)
     base = alloc_contiguous_from_zone(&kmem.zone[KALLOC_RECLAIMED_ZONE],
                                       STACK_PHYS_BASE, STACK_PHYS_END,
                                       count);
@@ -346,8 +312,7 @@ kalloc_free_pages(void)
 
   acquire(&kmem.lock);
   count = kmem.zone[KALLOC_LOW_ZONE].free_pages +
-          kmem.zone[KALLOC_RECLAIMED_ZONE].free_pages +
-          kmem.zone[KALLOC_EXTENDED_ZONE].free_pages;
+          kmem.zone[KALLOC_RECLAIMED_ZONE].free_pages;
   release(&kmem.lock);
   return count;
 }

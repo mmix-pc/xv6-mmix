@@ -71,13 +71,23 @@ diagnostic_boot(const struct mmix_boot_state *boot)
   if (boot->bootinfo_status != MMIX_BOOTINFO_OK)
     return;
 
-  diagnostic_puts("ram: [");
-  diagnostic_put_hex64(info->ram_base);
-  diagnostic_puts(", ");
-  diagnostic_put_hex64(info->ram_base + info->ram_size);
-  diagnostic_puts(")\n");
+  diagnostic_puts("ram total: ");
+  diagnostic_put_hex64(info->memory.total_size);
+  early_uart_putc('\n');
 
-  diagnostic_puts("low ram: [");
+  for (uint64 index = 0; index < info->memory.range_count; index++) {
+    const struct mmix_physical_range *range = &info->memory.range[index];
+
+    diagnostic_puts("physical ram ");
+    diagnostic_put_u64(index);
+    diagnostic_puts(": [");
+    diagnostic_put_hex64(range->base);
+    diagnostic_puts(", ");
+    diagnostic_put_hex64(range->base + range->size);
+    diagnostic_puts(")\n");
+  }
+
+  diagnostic_puts("ELF load RAM: [");
   diagnostic_put_hex64(info->low_ram_base);
   diagnostic_puts(", ");
   diagnostic_put_hex64(info->low_ram_base + info->low_ram_size);

@@ -15,10 +15,10 @@ struct mmix_boot_state {
 extern struct mmix_boot_state mmix_boot;
 
 // Valid after bootinfo_status reports a successful decode.
-static inline uint64
-boot_ram_end(void)
+static inline const struct mmix_physical_memory *
+boot_physical_memory(void)
 {
-  return mmix_boot.info.ram_base + mmix_boot.info.ram_size;
+  return &mmix_boot.info.memory;
 }
 
 void start(uint64 startup_cpu_id, uint64 bootinfo_pa)
