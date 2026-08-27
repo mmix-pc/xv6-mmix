@@ -27,7 +27,11 @@
 //   0x0000000010004000 +----------------------------------+
 //                      | INTC MMIO (8 KiB)                |
 //   0x0000000010006000 +----------------------------------+
-//                      | IPI MMIO and reserved aperture   |
+//                      | IPI MMIO (4 KiB)                 |
+//   0x0000000010007000 +----------------------------------+
+//                      | Reserved MMIO page padding       |
+//   0x0000000010008000 +----------------------------------+
+//                      | Reserved MMIO aperture           |
 //   0x0000000020000000 +----------------------------------+
 //                      | Optional High RAM                |
 //     larger RAM's end +----------------------------------+
@@ -99,6 +103,11 @@
 #define INTC_SHARED_IRQ_LAST 15
 #define INTC_CONTEXT_COUNT 16
 
+#define IPI_BASE 0x0000000010006000
+#define IPI_SIZE 0x0000000000001000
+#define IPI_TARGET_COUNT BOOT_CPU_COUNT
+#define IPI_REQUEST_MASK 0x0000000000000200
+
 // RAM capacity is split around one exclusive 256-MiB MMIO aperture.
 #define RAM_MINIMUM_SIZE 0x0000000010000000
 #define PHYSICAL_LOW_RAM_BASE 0x0000000000000000
@@ -110,7 +119,6 @@
 #define PHYSICAL_HIGH_RAM_BASE MMIO_APERTURE_END
 // The current kernel table construction uses the level-1 root directly.
 #define KERNEL_IDENTITY_LIMIT 0x0000000200000000
-#define MMIO_DEVICE_END (INTC_BASE + INTC_SIZE)
 
 // The current kernel configuration is single-CPU.
 #define BOOT_CPU_COUNT 1
@@ -140,6 +148,10 @@
 #define ROUNDUP(value, alignment)                                             \
   (((value) + (alignment) - 1) & ~((alignment) - 1))
 #define ROUNDDOWN(value, alignment) ((value) & ~((alignment) - 1))
+
+// MMIX pages containing declared device registers are mapped in full. The
+// rest of the MMIO aperture remains unmapped.
+#define MMIO_DEVICE_PAGE_END ROUNDUP(IPI_BASE + IPI_SIZE, MMIX_PAGE_SIZE)
 
 // Reserve the first physical page for MMIX's fixed low TRIP vectors. The
 // kernel does not map the corresponding virtual page until TRIP support exists.
@@ -179,7 +191,11 @@
 //                      | Unmapped platform/framebuffer    |
 //   0x0000000010000000 +----------------------------------+
 //                      | Identity-mapped device pages     |
-//   0x0000000010006000 +----------------------------------+
+//   0x0000000010008000 +----------------------------------+
+//                      | Unmapped MMIO aperture           |
+//   0x0000000020000000 +----------------------------------+
+//                      | Optional identity High RAM       |
+//     larger RAM's end +----------------------------------+
 //                      | Unmapped                         |
 //   0x000007ffffd76000 +----------------------------------+
 //                      | 65 kernel context slots          |
@@ -323,8 +339,10 @@ _Static_assert(FRAMEBUFFER_CONTROL_BASE + FRAMEBUFFER_CONTROL_SIZE <=
                "framebuffer control must not overlap the timer");
 _Static_assert(TIMER_BASE + TIMER_SIZE <= INTC_BASE,
                "timer MMIO range must not overlap the interrupt controller");
-_Static_assert(INTC_BASE + INTC_SIZE == MMIO_DEVICE_END,
-               "mapped MMIO devices must end at the INTC");
+_Static_assert(INTC_BASE + INTC_SIZE == IPI_BASE,
+               "IPI MMIO must follow the interrupt controller");
+_Static_assert(IPI_TARGET_COUNT == BOOT_CPU_COUNT,
+               "IPI targets must match the CPU topology");
 _Static_assert(RAM_MINIMUM_SIZE == FRAMEBUFFER_END &&
                    (RAM_MINIMUM_SIZE & (MMIX_PAGE_SIZE - 1)) == 0,
                "minimum RAM must contain the fixed physical platform");
@@ -333,9 +351,9 @@ _Static_assert(PHYSICAL_LOW_RAM_BASE == 0 &&
                    MMIO_APERTURE_END == PHYSICAL_HIGH_RAM_BASE &&
                    (PHYSICAL_HIGH_RAM_BASE & (MMIX_PAGE_SIZE - 1)) == 0,
                "physical RAM intervals must surround the MMIO aperture");
-_Static_assert(MMIO_DEVICE_END > MMIO_APERTURE_BASE &&
-                   MMIO_DEVICE_END <= MMIO_APERTURE_END &&
-                   (MMIO_DEVICE_END & (MMIX_PAGE_SIZE - 1)) == 0,
+_Static_assert(IPI_BASE + IPI_SIZE <= MMIO_DEVICE_PAGE_END &&
+                   MMIO_DEVICE_PAGE_END <= MMIO_APERTURE_END &&
+                   (MMIO_DEVICE_PAGE_END & (MMIX_PAGE_SIZE - 1)) == 0,
                "device mappings must fit the MMIO aperture");
 
 _Static_assert((KERNEL_LOAD & (MMIX_PAGE_SIZE - 1)) == 0,

@@ -87,7 +87,11 @@ valid_devices(const struct mmix_bootinfo *info)
          info->intc_irq_count == INTC_IRQ_COUNT &&
          info->virtio_mmio_base == VIRTIO0_BASE &&
          info->virtio_mmio_irq == VIRTIO0_IRQ &&
-         info->virtio_mmio_count == VIRTIO_MMIO_COUNT;
+         info->virtio_mmio_count == VIRTIO_MMIO_COUNT &&
+         info->framebuffer_control_base == FRAMEBUFFER_CONTROL_BASE &&
+         info->ipi_base == IPI_BASE &&
+         info->ipi_target_count == IPI_TARGET_COUNT &&
+         info->ipi_request_mask == IPI_REQUEST_MASK;
 }
 
 int
@@ -173,6 +177,13 @@ bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
       load_be_octa(wire, MMIX_BOOTINFO_VIRTIO_MMIO_IRQ_FIELD);
   info.virtio_mmio_count =
       load_be_octa(wire, MMIX_BOOTINFO_VIRTIO_MMIO_COUNT_FIELD);
+  info.framebuffer_control_base =
+      load_be_octa(wire, MMIX_BOOTINFO_FRAMEBUFFER_CONTROL_BASE_FIELD);
+  info.ipi_base = load_be_octa(wire, MMIX_BOOTINFO_IPI_BASE_FIELD);
+  info.ipi_target_count =
+      load_be_octa(wire, MMIX_BOOTINFO_IPI_TARGET_COUNT_FIELD);
+  info.ipi_request_mask =
+      load_be_octa(wire, MMIX_BOOTINFO_IPI_REQUEST_MASK_FIELD);
   if (!valid_devices(&info))
     return MMIX_BOOTINFO_BAD_DEVICE;
 
@@ -207,5 +218,9 @@ bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
   decoded->virtio_mmio_base = info.virtio_mmio_base;
   decoded->virtio_mmio_irq = info.virtio_mmio_irq;
   decoded->virtio_mmio_count = info.virtio_mmio_count;
+  decoded->framebuffer_control_base = info.framebuffer_control_base;
+  decoded->ipi_base = info.ipi_base;
+  decoded->ipi_target_count = info.ipi_target_count;
+  decoded->ipi_request_mask = info.ipi_request_mask;
   return MMIX_BOOTINFO_OK;
 }

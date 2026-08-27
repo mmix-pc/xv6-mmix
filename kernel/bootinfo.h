@@ -119,6 +119,10 @@ struct mmix_bootinfo {
   uint64 virtio_mmio_base;
   uint64 virtio_mmio_irq;
   uint64 virtio_mmio_count;
+  uint64 framebuffer_control_base;
+  uint64 ipi_base;
+  uint64 ipi_target_count;
+  uint64 ipi_request_mask;
 };
 
 int bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
