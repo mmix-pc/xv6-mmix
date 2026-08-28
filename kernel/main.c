@@ -4,6 +4,7 @@
 #include "mmix.h"
 #include "defs.h"
 #include "boot.h"
+#include "diagnostic.h"
 #include "intc.h"
 #include "kalloc.h"
 #include "kcontext.h"
@@ -15,6 +16,8 @@ void main(void) __attribute__((noreturn));
 void
 main(void)
 {
+  struct kalloc_stats allocator_stats;
+
   if (mmix_boot.bootinfo_status != MMIX_BOOTINFO_OK)
     panic("bootinfo");
   kinit();            // physical page allocator
@@ -23,6 +26,8 @@ main(void)
   kinit_reclaimed();  // add mapped Pool, Data, and Stack backing
   kinit_high();       // add optional mapped High RAM
   kcontext_init();
+  kalloc_get_stats(&allocator_stats);
+  diagnostic_allocator(&allocator_stats);
   procinit();         // process table
   trapinit();         // trap vectors
   trapinithart();     // install kernel trap vector

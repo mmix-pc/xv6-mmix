@@ -1,5 +1,6 @@
 #include "boot.h"
 #include "early_uart.h"
+#include "kalloc.h"
 #include "diagnostic.h"
 
 static void
@@ -119,11 +120,29 @@ diagnostic_boot(const struct mmix_boot_state *boot)
 }
 
 void
+diagnostic_allocator(const struct kalloc_stats *stats)
+{
+  diagnostic_puts("allocator: physical-pages=");
+  diagnostic_put_u64(stats->physical_pages);
+  diagnostic_puts(" managed-pages=");
+  diagnostic_put_u64(stats->managed_pages);
+  diagnostic_puts(" reserved-pages=");
+  diagnostic_put_u64(stats->physical_pages - stats->managed_pages);
+  diagnostic_puts(" free-pages=");
+  diagnostic_put_u64(stats->free_pages);
+  diagnostic_puts("\nallocator high: managed-pages=");
+  diagnostic_put_u64(stats->high_managed_pages);
+  diagnostic_puts(" used-pages=");
+  diagnostic_put_u64(stats->high_managed_pages - stats->high_free_pages);
+  diagnostic_puts("\nallocator audit passed\n");
+}
+
+void
 diagnostic_paging(uint64 rv)
 {
   diagnostic_puts("rV: ");
   diagnostic_put_hex64(rv);
-  diagnostic_puts("\npaging enabled\n");
+  diagnostic_puts("\nkernel page-table audit passed\npaging enabled\n");
 }
 
 void

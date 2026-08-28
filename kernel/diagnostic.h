@@ -2,6 +2,7 @@
 #define XV6_MMIX_DIAGNOSTIC_H
 
 struct mmix_boot_state;
+struct kalloc_stats;
 
 struct mmix_trap_diagnostic {
   int from_user;
@@ -29,6 +30,7 @@ struct mmix_trap_diagnostic {
 };
 
 void diagnostic_boot(const struct mmix_boot_state *boot);
+void diagnostic_allocator(const struct kalloc_stats *stats);
 void diagnostic_paging(uint64 rv);
 void diagnostic_trap(const struct mmix_trap_diagnostic *diagnostic);
 

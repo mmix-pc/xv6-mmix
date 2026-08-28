@@ -417,3 +417,23 @@ kalloc_free_pages(void)
   release(&kmem.lock);
   return count;
 }
+
+void
+kalloc_get_stats(struct kalloc_stats *stats)
+{
+  if (stats == 0)
+    panic("kalloc stats");
+
+  acquire(&kmem.lock);
+  allocator_audit_locked();
+  stats->physical_pages = boot_physical_memory()->total_size / PGSIZE;
+  stats->managed_pages = 0;
+  stats->free_pages = 0;
+  for (int zone = 0; zone < KALLOC_ZONE_COUNT; zone++) {
+    stats->managed_pages += kmem.zone[zone].managed_pages;
+    stats->free_pages += kmem.zone[zone].free_pages;
+  }
+  stats->high_managed_pages = kmem.zone[KALLOC_HIGH_ZONE].managed_pages;
+  stats->high_free_pages = kmem.zone[KALLOC_HIGH_ZONE].free_pages;
+  release(&kmem.lock);
+}
