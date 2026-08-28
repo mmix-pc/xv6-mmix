@@ -120,7 +120,9 @@
 // The current kernel table construction uses the level-1 root directly.
 #define KERNEL_IDENTITY_LIMIT 0x0000000200000000
 
-// The current kernel configuration is single-CPU.
+// QEMU supports up to sixteen CPUs. Until the SMP startup barrier exists, only
+// the boot CPU may proceed beyond the private entry-state boundary.
+#define MMIX_MAX_CPUS 16
 #define BOOT_CPU_COUNT 1
 #define BOOT_CPU_ID 0
 
@@ -134,15 +136,16 @@
 //   0x0000000000008000 +----------------------------------+
 //                      | Reserved gap (32 KiB)            |
 //   0x0000000000010000 +----------------------------------+
-//                      | Bootstrap register stack         |
+//                      | Bootstrap register-stack slots   |
 //   0x0000000000100000 +----------------------------------+ KERNEL_LOAD
 //                      | Kernel image                     |
 //                      +----------------------------------+ KALLOC_START(end)
-//                      | Free pages below the boot stack  |
-//   0x0000000005ffe000 +----------------------------------+ KERNEL_LIMIT
-//                      | Bootstrap stack (8 KiB)          |
+//                      | Free pages below boot stacks     |
+//   0x0000000005fe0000 +----------------------------------+ KERNEL_LIMIT
+//                      | 16 bootstrap stacks (128 KiB)    |
 //   0x0000000006000000 +----------------------------------+
 #define MMIX_PAGE_SIZE 0x0000000000002000
+#define MMIX_PAGE_SHIFT 13
 
 // The alignment must be a power of two.
 #define ROUNDUP(value, alignment)                                             \
@@ -168,14 +171,26 @@
 
 #define REGISTER_STACK_BASE 0x0000000000010000
 #define REGISTER_STACK_LIMIT 0x0000000000100000
+#define BOOT_REGISTER_STACK_STRIDE 0x0000000000008000
+#define BOOT_REGISTER_STACK_SIZE BOOT_REGISTER_STACK_STRIDE
+#define BOOT_REGISTER_STACK_BASE(cpu_id)                                    \
+  (REGISTER_STACK_BASE + (cpu_id) * BOOT_REGISTER_STACK_STRIDE)
+#define BOOT_REGISTER_STACK_LIMIT(cpu_id)                                   \
+  (BOOT_REGISTER_STACK_BASE(cpu_id) + BOOT_REGISTER_STACK_SIZE)
 
 #define KERNEL_LOAD 0x0000000000100000
 #define KERNEL_ENTRY KERNEL_LOAD
-#define KERNEL_LIMIT 0x0000000005ffe000
+#define KERNEL_LIMIT 0x0000000005fe0000
 
-#define BOOT_STACK_BASE 0x0000000005ffe000
 #define BOOT_STACK_SIZE MMIX_PAGE_SIZE
-#define BOOT_STACK_TOP (BOOT_STACK_BASE + BOOT_STACK_SIZE)
+#define BOOT_STACK_COUNT MMIX_MAX_CPUS
+#define BOOT_STACK_AREA_SIZE (BOOT_STACK_COUNT * BOOT_STACK_SIZE)
+#define BOOT_STACK_AREA_BASE (LOW_RAM_END - BOOT_STACK_AREA_SIZE)
+#define BOOT_STACK_AREA_TOP LOW_RAM_END
+#define BOOT_STACK_BASE(cpu_id)                                             \
+  (BOOT_STACK_AREA_TOP - ((cpu_id) + 1) * BOOT_STACK_SIZE)
+#define BOOT_STACK_TOP(cpu_id)                                              \
+  (BOOT_STACK_AREA_TOP - (cpu_id) * BOOT_STACK_SIZE)
 
 // Kernel virtual address map. Identity ranges map a virtual address to the
 // same physical address. Negative addresses produced by mmix_phys_alias()
@@ -284,7 +299,7 @@
    MMIX_PAGE_SIZE)
 
 #define KALLOC_START(kernel_end) ROUNDUP(kernel_end, MMIX_PAGE_SIZE)
-#define KALLOC_LOW_LIMIT BOOT_STACK_BASE
+#define KALLOC_LOW_LIMIT BOOT_STACK_AREA_BASE
 #define KALLOC_RECLAIMED_START BARE_SEGMENT_BACKING_BASE
 #define KALLOC_RECLAIMED_LIMIT BARE_SEGMENT_BACKING_LIMIT
 #define KALLOC_RECLAIMED_PAGES                                      \
@@ -364,12 +379,24 @@ _Static_assert((REGISTER_STACK_BASE & 7) == 0 &&
 _Static_assert(KERNEL_LOAD == REGISTER_STACK_LIMIT,
                "kernel must follow the reserved register-stack range");
 _Static_assert(KERNEL_LIMIT == KALLOC_LOW_LIMIT &&
-                   KALLOC_LOW_LIMIT == BOOT_STACK_BASE,
-               "kernel limit must stop at the bootstrap stack");
-_Static_assert(BOOT_STACK_SIZE == MMIX_PAGE_SIZE,
-               "the kernel must reserve exactly one bootstrap stack page");
-_Static_assert(BOOT_STACK_TOP == LOW_RAM_END,
-               "bootstrap stack must end at the top of Low RAM");
+                   KALLOC_LOW_LIMIT == BOOT_STACK_AREA_BASE,
+               "kernel limit must stop at the bootstrap stacks");
+_Static_assert(MMIX_PAGE_SIZE == (1 << MMIX_PAGE_SHIFT),
+               "MMIX page size and shift must agree");
+_Static_assert(BOOT_STACK_SIZE == MMIX_PAGE_SIZE &&
+                   BOOT_STACK_COUNT == MMIX_MAX_CPUS &&
+                   BOOT_STACK_AREA_SIZE == 0x20000,
+               "the kernel must reserve one bootstrap page per CPU");
+_Static_assert(BOOT_STACK_AREA_TOP == LOW_RAM_END &&
+                   BOOT_STACK_AREA_BASE == KERNEL_LIMIT &&
+                   BOOT_STACK_BASE(0) == 0x0000000005ffe000 &&
+                   BOOT_STACK_TOP(MMIX_MAX_CPUS - 1) ==
+                     BOOT_STACK_AREA_BASE + BOOT_STACK_SIZE,
+               "bootstrap stack geometry is invalid");
+_Static_assert(BOOT_REGISTER_STACK_BASE(0) == REGISTER_STACK_BASE &&
+                   BOOT_REGISTER_STACK_LIMIT(MMIX_MAX_CPUS - 1) <=
+                     REGISTER_STACK_LIMIT,
+               "initial register stacks exceed their reserved range");
 _Static_assert(MMIX_CONTEXT_AREA_TOP == 0x0000080000000000 &&
                  MMIX_CONTEXT_AREA_BASE == 0x000007ffffd76000,
                "kernel context window must match the scheduler ABI");

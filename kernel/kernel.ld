@@ -37,6 +37,8 @@ SECTIONS
   kernel_low_vectors_end = 0x00002000;
   kernel_root_tables_start = 0x00002000;
   kernel_root_tables_end = 0x00008000;
+  kernel_boot_stacks_start = 0x05fe0000;
+  kernel_boot_stacks_end = 0x06000000;
 
   ASSERT(_entry == 0x00100000,
          "kernel entry does not match KERNEL_ENTRY")
@@ -84,11 +86,16 @@ SECTIONS
              mmix_user_trapframe >= kernel_rodata_end &&
              mmix_user_trapframe + 8 <= kernel_end,
          "MMIX trap state is outside kernel writable storage")
-  ASSERT(kernel_end <= 0x05ffe000,
-         "kernel overlaps the bootstrap stack")
-  ASSERT(0x05ffe000 + 1024 < 0x06000000,
-         "bootstrap stack cannot hold the MMIX trap path")
-  ASSERT(0x00008000 <= 0x00010000 && 0x00010000 < 0x00100000,
+  ASSERT(kernel_end <= kernel_boot_stacks_start,
+         "kernel overlaps the bootstrap stacks")
+  ASSERT(kernel_boot_stacks_end - kernel_boot_stacks_start == 0x20000 &&
+             (kernel_boot_stacks_start & 0x1fff) == 0,
+         "MMIX bootstrap stack reservation is invalid")
+  ASSERT(kernel_boot_stacks_start + 1024 <
+             kernel_boot_stacks_start + 0x2000,
+         "a bootstrap stack cannot hold the MMIX trap path")
+  ASSERT(0x00008000 <= 0x00010000 &&
+             0x00010000 + 16 * 0x00008000 <= 0x00100000,
          "MMIX register-stack backing range is invalid")
 
   /DISCARD/ : {

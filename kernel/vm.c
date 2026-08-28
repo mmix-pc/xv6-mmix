@@ -1051,12 +1051,19 @@ kernel_pagetable_audit(pagetable_t pagetable)
       require_identity(pagetable, (uint64)kvminithart, PTE_R | PTE_X) < 0 ||
       require_identity(pagetable, (uint64)&child_count, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, (uint64)&mmix_boot, PTE_R | PTE_W) < 0 ||
+      require_identity(pagetable, (uint64)&mmix_boot_handoffs[0],
+                       PTE_R | PTE_W) < 0 ||
+      require_identity(pagetable,
+                       (uint64)&mmix_boot_handoffs[MMIX_MAX_CPUS - 1],
+                       PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, (uint64)&kernel_pagetable, PTE_R | PTE_W) <
         0 ||
       require_identity(pagetable, first_free, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, KALLOC_LOW_LIMIT - PGSIZE,
                        PTE_R | PTE_W) < 0 ||
-      require_identity(pagetable, BOOT_STACK_BASE, PTE_R | PTE_W) < 0 ||
+      require_identity(pagetable, BOOT_STACK_AREA_BASE, PTE_R | PTE_W) < 0 ||
+      require_identity(pagetable, BOOT_STACK_AREA_TOP - PGSIZE,
+                       PTE_R | PTE_W) < 0 ||
       require_identity_permissions(pagetable, POOL_PHYS_BASE,
                                    PTE_R | PTE_W) < 0 ||
       require_identity_permissions(pagetable, POOL_PHYS_END - PGSIZE,

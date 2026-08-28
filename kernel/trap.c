@@ -464,7 +464,8 @@ trapinit(void)
   if (ro < REGISTER_STACK_BASE || ro >= REGISTER_STACK_LIMIT ||
       rs < REGISTER_STACK_BASE || rs >= REGISTER_STACK_LIMIT)
     panic("trap register stack");
-  if (sp <= BOOT_STACK_BASE + MMIX_TRAP_STACK_RESERVE || sp > BOOT_STACK_TOP)
+  if (sp <= BOOT_STACK_BASE(BOOT_CPU_ID) + MMIX_TRAP_STACK_RESERVE ||
+      sp > BOOT_STACK_TOP(BOOT_CPU_ID))
     panic("trap software stack");
   if (mmix_trap_vector_make(entry, (uint64)kernel_text_end, &mmix_trap_vector) <
       0)
