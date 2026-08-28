@@ -39,6 +39,10 @@ main(void)
   iinit();            // inode table
   fileinit();         // file table
   virtio_disk_init(); // emulated hard disk
+  if (boot_publish_global_ready() < 0)
+    panic("global publish");
+
+  // CPU 0 retains the single-core service path after publishing global state.
   if (timer_init() != MMIX_TIMER_OK)
     panic("timer init");
   if (timer_arm_next() != MMIX_TIMER_OK)

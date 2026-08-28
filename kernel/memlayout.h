@@ -74,6 +74,10 @@
 #define FRAMEBUFFER_SIZE 0x0000000001000000
 #define FRAMEBUFFER_END (FRAMEBUFFER_BASE + FRAMEBUFFER_SIZE)
 
+// The production topology has one boot CPU and up to sixteen configured CPUs.
+#define MMIX_MAX_CPUS 16
+#define BOOT_CPU_ID 0
+
 // QEMU MMIX virt MMIO map. Device register offsets belong to each driver.
 #define MMIO_BASE 0x0000000010000000
 
@@ -94,7 +98,7 @@
 #define TIMER_BASE 0x0000000010003000
 #define TIMER_SIZE 0x0000000000001000
 #define TIMER_IRQ_BASE 16
-#define TIMER_IRQ_COUNT 1
+#define TIMER_IRQ_COUNT_MAX MMIX_MAX_CPUS
 
 #define INTC_BASE 0x0000000010004000
 #define INTC_SIZE 0x0000000000002000
@@ -105,7 +109,7 @@
 
 #define IPI_BASE 0x0000000010006000
 #define IPI_SIZE 0x0000000000001000
-#define IPI_TARGET_COUNT BOOT_CPU_COUNT
+#define IPI_TARGET_COUNT_MAX MMIX_MAX_CPUS
 #define IPI_REQUEST_MASK 0x0000000000000200
 
 // RAM capacity is split around one exclusive 256-MiB MMIO aperture.
@@ -119,12 +123,6 @@
 #define PHYSICAL_HIGH_RAM_BASE MMIO_APERTURE_END
 // The current kernel table construction uses the level-1 root directly.
 #define KERNEL_IDENTITY_LIMIT 0x0000000200000000
-
-// QEMU supports up to sixteen CPUs. Until the SMP startup barrier exists, only
-// the boot CPU may proceed beyond the private entry-state boundary.
-#define MMIX_MAX_CPUS 16
-#define BOOT_CPU_COUNT 1
-#define BOOT_CPU_ID 0
 
 // Bootstrap physical layout within Low RAM. The kernel image ends before the
 // allocator begins; that boundary is supplied by the linker.
@@ -359,8 +357,10 @@ _Static_assert(TIMER_BASE + TIMER_SIZE <= INTC_BASE,
                "timer MMIO range must not overlap the interrupt controller");
 _Static_assert(INTC_BASE + INTC_SIZE == IPI_BASE,
                "IPI MMIO must follow the interrupt controller");
-_Static_assert(IPI_TARGET_COUNT == BOOT_CPU_COUNT,
-               "IPI targets must match the CPU topology");
+_Static_assert(TIMER_IRQ_COUNT_MAX == MMIX_MAX_CPUS &&
+                   IPI_TARGET_COUNT_MAX == MMIX_MAX_CPUS &&
+                   INTC_CONTEXT_COUNT == MMIX_MAX_CPUS,
+               "CPU-local devices must cover the maximum topology");
 _Static_assert(RAM_MINIMUM_SIZE == FRAMEBUFFER_END &&
                    (RAM_MINIMUM_SIZE & (MMIX_PAGE_SIZE - 1)) == 0,
                "minimum RAM must contain the fixed physical platform");

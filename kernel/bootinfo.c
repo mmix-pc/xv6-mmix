@@ -82,7 +82,8 @@ valid_devices(const struct mmix_bootinfo *info)
   return info->mmio_base == MMIO_BASE && info->uart_base == UART0_BASE &&
          info->uart_irq == UART0_IRQ && info->timer_base == TIMER_BASE &&
          info->timer_irq_base == TIMER_IRQ_BASE &&
-         info->timer_irq_count == TIMER_IRQ_COUNT &&
+         info->timer_irq_count == info->cpu_count &&
+         info->timer_irq_count <= TIMER_IRQ_COUNT_MAX &&
          info->intc_base == INTC_BASE &&
          info->intc_irq_count == INTC_IRQ_COUNT &&
          info->virtio_mmio_base == VIRTIO0_BASE &&
@@ -90,7 +91,8 @@ valid_devices(const struct mmix_bootinfo *info)
          info->virtio_mmio_count == VIRTIO_MMIO_COUNT &&
          info->framebuffer_control_base == FRAMEBUFFER_CONTROL_BASE &&
          info->ipi_base == IPI_BASE &&
-         info->ipi_target_count == IPI_TARGET_COUNT &&
+         info->ipi_target_count == info->cpu_count &&
+         info->ipi_target_count <= IPI_TARGET_COUNT_MAX &&
          info->ipi_request_mask == IPI_REQUEST_MASK;
 }
 
@@ -131,8 +133,9 @@ bootinfo_decode(uint64 startup_cpu_id, uint64 bootinfo_pa,
 
   info.cpu_count = load_be_octa(wire, MMIX_BOOTINFO_CPU_COUNT_FIELD);
   info.boot_cpu_id = load_be_octa(wire, MMIX_BOOTINFO_BOOT_CPU_ID_FIELD);
-  if (info.cpu_count != BOOT_CPU_COUNT || info.boot_cpu_id != startup_cpu_id ||
-      info.boot_cpu_id >= info.cpu_count || startup_cpu_id != BOOT_CPU_ID)
+  if (info.cpu_count == 0 || info.cpu_count > MMIX_MAX_CPUS ||
+      info.boot_cpu_id != BOOT_CPU_ID ||
+      startup_cpu_id != info.boot_cpu_id)
     return MMIX_BOOTINFO_BAD_CPU;
 
   ram_base = load_be_octa(wire, MMIX_BOOTINFO_RAM_BASE_FIELD);

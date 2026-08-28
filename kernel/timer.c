@@ -29,8 +29,10 @@ timer_platform_valid(void)
 
   return mmix_boot.bootinfo_status == MMIX_BOOTINFO_OK &&
          (info->timer_base & (MMIX_TIMER_REGISTER_SIZE - 1)) == 0 &&
-         info->boot_cpu_id == 0 && info->timer_irq_base == MMIX_TIMER_IRQ &&
-         info->timer_irq_count == 1 &&
+         info->boot_cpu_id == BOOT_CPU_ID &&
+         info->timer_irq_base == MMIX_TIMER_IRQ &&
+         info->timer_irq_count == info->cpu_count &&
+         info->timer_irq_count <= TIMER_IRQ_COUNT_MAX &&
          info->timer_irq_base < info->intc_irq_count;
 }
 
