@@ -205,6 +205,10 @@
 #define MMIX_TRAP_CLASS_PROGRAM  2
 #define MMIX_TRAP_CLASS_EXTERNAL 3
 
+// The kernel reserves rU's stable usage-pattern byte for the CPU identity.
+#define MMIX_RU_CPU_ID_SHIFT 56
+#define MMIX_RU_CPU_ID_MASK  (0xffULL << MMIX_RU_CPU_ID_SHIFT)
+
 #if !defined(__ASSEMBLER__)
 
 #include "types.h"
@@ -433,6 +437,19 @@ MMIX_DEFINE_SR_READ(mmix_rt_read, rT)
 MMIX_DEFINE_SR_WRITE(mmix_rt_write, rT)
 MMIX_DEFINE_SR_READ(mmix_rtt_read, rTT)
 MMIX_DEFINE_SR_WRITE(mmix_rtt_write, rTT)
+MMIX_DEFINE_SR_READ(mmix_ru_read, rU)
+
+static inline uint64
+mmix_ru_bind_cpu(uint64 value, uint64 cpu_id)
+{
+  return (value & ~MMIX_RU_CPU_ID_MASK) | (cpu_id << MMIX_RU_CPU_ID_SHIFT);
+}
+
+static inline uint64
+mmix_ru_cpu_id(uint64 value)
+{
+  return value >> MMIX_RU_CPU_ID_SHIFT;
+}
 
 MMIX_DEFINE_SR_READ(mmix_rb_read, rB)
 MMIX_DEFINE_SR_WRITE(mmix_rb_write, rB)

@@ -219,12 +219,15 @@
 //   0x8000000000000000 +----------------------------------+
 //                      | Direct aliases of mapped RAM     |
 //
-// Slot 0 belongs to the scheduler; slots 1 through 64 correspond to
-// proc[0..63]. Each slot has two mapped pages separated and bounded by guards.
+// Slots 0 through 15 belong to the per-CPU schedulers; slots 16 through 79
+// correspond to proc[0..63]. Each slot has two mapped pages separated and
+// bounded by guards.
 #define MMIX_CONTEXT_AREA_TOP          0x0000080000000000
-#define MMIX_CONTEXT_SLOT_COUNT        65
-#define MMIX_CONTEXT_SCHEDULER_SLOT    0
-#define MMIX_CONTEXT_PROCESS_SLOT_BASE 1
+#define MMIX_CONTEXT_PROCESS_COUNT     64
+#define MMIX_CONTEXT_SLOT_COUNT        \
+  (MMIX_MAX_CPUS + MMIX_CONTEXT_PROCESS_COUNT)
+#define MMIX_CONTEXT_SCHEDULER_SLOT(cpu_id) (cpu_id)
+#define MMIX_CONTEXT_PROCESS_SLOT_BASE MMIX_MAX_CPUS
 #define MMIX_CONTEXT_SLOT_PAGES        5
 #define MMIX_CONTEXT_SLOT_STRIDE (MMIX_CONTEXT_SLOT_PAGES * MMIX_PAGE_SIZE)
 #define MMIX_CONTEXT_AREA_SIZE                                                 \
@@ -383,6 +386,8 @@ _Static_assert(KERNEL_LIMIT == KALLOC_LOW_LIMIT &&
                "kernel limit must stop at the bootstrap stacks");
 _Static_assert(MMIX_PAGE_SIZE == (1 << MMIX_PAGE_SHIFT),
                "MMIX page size and shift must agree");
+_Static_assert(MMIX_MAX_CPUS <= 256,
+               "CPU identities must fit in the rU usage-pattern byte");
 _Static_assert(BOOT_STACK_SIZE == MMIX_PAGE_SIZE &&
                    BOOT_STACK_COUNT == MMIX_MAX_CPUS &&
                    BOOT_STACK_AREA_SIZE == 0x20000,
@@ -398,23 +403,26 @@ _Static_assert(BOOT_REGISTER_STACK_BASE(0) == REGISTER_STACK_BASE &&
                      REGISTER_STACK_LIMIT,
                "initial register stacks exceed their reserved range");
 _Static_assert(MMIX_CONTEXT_AREA_TOP == 0x0000080000000000 &&
-                 MMIX_CONTEXT_AREA_BASE == 0x000007ffffd76000,
+                 MMIX_CONTEXT_AREA_BASE == 0x000007ffffce0000,
                "kernel context window must match the scheduler ABI");
 _Static_assert(MMIX_CONTEXT_SLOT_STRIDE == 0xa000 &&
-                 MMIX_CONTEXT_AREA_SIZE == 0x28a000,
+                 MMIX_CONTEXT_AREA_SIZE == 0x320000,
                "kernel context slot geometry must match the scheduler ABI");
 _Static_assert(MMIX_CONTEXT_AREA_BASE > MMIO_BASE + INTC_SIZE,
                "kernel contexts must not overlap identity or device maps");
 _Static_assert((MMIX_CONTEXT_AREA_BASE / 0x800000) ==
                  ((MMIX_CONTEXT_AREA_TOP - 1) / 0x800000),
                "kernel contexts must share one level-1 table span");
-_Static_assert(MMIX_CONTEXT_HIGH_GUARD(MMIX_CONTEXT_SCHEDULER_SLOT) ==
+_Static_assert(MMIX_CONTEXT_HIGH_GUARD(MMIX_CONTEXT_SCHEDULER_SLOT(0)) ==
                    MMIX_CONTEXT_AREA_TOP - MMIX_PAGE_SIZE &&
+                 MMIX_CONTEXT_HIGH_GUARD(
+                   MMIX_CONTEXT_SCHEDULER_SLOT(MMIX_MAX_CPUS - 1)) ==
+                   0x000007fffff68000 &&
                  MMIX_CONTEXT_LOW_GUARD(MMIX_CONTEXT_SLOT_COUNT - 1) ==
                    MMIX_CONTEXT_AREA_BASE,
                "kernel context endpoints must match the reserved window");
-_Static_assert(KSTACK(0) == 0x000007fffffee000 &&
-                 KSTACK(63) == 0x000007ffffd78000,
+_Static_assert(KSTACK(0) == 0x000007fffff58000 &&
+                 KSTACK(63) == 0x000007ffffce2000,
                "process kernel-stack endpoints must match the scheduler ABI");
 _Static_assert(MMIX_USER_IMAGE_BASE == MMIX_PAGE_SIZE &&
                  MMIX_USER_LOW_GUARD_BASE == 0 &&

@@ -502,13 +502,15 @@ trapinithart(void)
 void
 usertrapret(void)
 {
-  struct cpu *c = mycpu();
-  struct proc *p = c->proc;
+  struct cpu *c;
+  struct proc *p;
   struct trapframe *trapframe;
   uint64 alias;
   uint32 enabled_irqs;
 
   mmix_intr_mask_write(0);
+  c = mycpu();
+  p = c->proc;
   if (p == 0 || p->state != RUNNING || holding(&p->lock) || c->noff != 0 ||
       mmix_user_trapframe != 0 || mmix_trap_active != 0)
     panic("user return owner");
@@ -539,6 +541,8 @@ usertrapret(void)
     panic("user return stack");
 
   alias = mmix_phys_alias((uint64)trapframe);
+  // Preserve the user usage mask and count, but never its CPU selector.
+  trapframe->user_ru = mmix_ru_bind_cpu(trapframe->user_ru, cpuid());
   trapframe->flags = MMIX_PROC_TRAPFRAME_ACTIVE;
   asm volatile("" : : : "memory");
   mmix_user_trapframe = alias;

@@ -1,5 +1,6 @@
 #include "boot.h"
 #include "memlayout.h"
+#include "cpu.h"
 #include "diagnostic.h"
 #include "early_uart.h"
 
@@ -36,6 +37,10 @@ start(uint64 startup_cpu_id, uint64 bootinfo_pa)
   handoff->software_stack_top = BOOT_STACK_TOP(startup_cpu_id);
   handoff->register_stack_base = BOOT_REGISTER_STACK_BASE(startup_cpu_id);
   handoff->register_stack_limit = BOOT_REGISTER_STACK_LIMIT(startup_cpu_id);
+
+  if ((uint64)cpuid() != startup_cpu_id ||
+      mycpu() != &cpus[startup_cpu_id])
+    secondary_wait();
 
   if (startup_cpu_id != BOOT_CPU_ID)
     secondary_wait();

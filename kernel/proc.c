@@ -555,18 +555,21 @@ growproc(int n)
   return proc_user_grow(myproc(), n);
 }
 
-// The current kernel boots exactly one CPU and assigns it ID 0.
 int
 cpuid(void)
 {
-  return BOOT_CPU_ID;
+  uint64 id = mmix_ru_cpu_id(mmix_ru_read());
+
+  if (id >= NCPU)
+    panic("cpu identity");
+  return (int)id;
 }
 
 // Callers keep dynamic interrupts masked while using CPU-local state.
 struct cpu *
 mycpu(void)
 {
-  return &cpus[BOOT_CPU_ID];
+  return &cpus[cpuid()];
 }
 
 // Return the current struct proc *, or zero if none.
@@ -588,10 +591,12 @@ void
 scheduler(void)
 {
   struct context startup_context;
-  struct cpu *c = mycpu();
+  struct cpu *c;
 
-  kcontext_prepare(&c->context, MMIX_CONTEXT_SCHEDULER_SLOT, scheduler_loop);
   intr_off();
+  c = mycpu();
+  kcontext_prepare(&c->context, MMIX_CONTEXT_SCHEDULER_SLOT(cpuid()),
+                   scheduler_loop);
   swtch(&startup_context, &c->context);
   panic("scheduler returned");
 }
@@ -900,5 +905,5 @@ procdump(void)
   }
 }
 
-_Static_assert(NCPU == BOOT_CPU_COUNT,
-               "the kernel must provide exactly one CPU structure");
+_Static_assert(NCPU == MMIX_MAX_CPUS,
+               "CPU table must cover the supported MMIX topology");

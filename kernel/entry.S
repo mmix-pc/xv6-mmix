@@ -1,4 +1,5 @@
 #include "memlayout.h"
+#include "mmix.h"
 
 .section .text
 .global _entry
@@ -23,6 +24,10 @@ _entry:
         // remain unchanged.
 .Lcpu_valid:
         PUT rG, 231
+        // rU is CPU-local, privileged to write, and excluded from SAVE. Its
+        // stable usage-pattern byte therefore carries the kernel CPU ID.
+        SLU r233,r231,MMIX_RU_CPU_ID_SHIFT
+        PUT rU,r233
         SETML r254,((BOOT_STACK_AREA_TOP >> 16) & 0xffff)
         SLU r233,r231,MMIX_PAGE_SHIFT
         SUBU r254,r254,r233

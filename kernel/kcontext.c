@@ -90,8 +90,11 @@ kcontext_init(void)
   uint64 free_before = kalloc_free_pages();
   uint64 free_after;
 
-  if (MMIX_CONTEXT_SLOT_COUNT != NPROC + NCPU ||
-      MMIX_CONTEXT_SCHEDULER_SLOT != 0 ||
+  if (NCPU != MMIX_MAX_CPUS ||
+      MMIX_CONTEXT_PROCESS_COUNT != NPROC ||
+      MMIX_CONTEXT_SLOT_COUNT != NPROC + NCPU ||
+      MMIX_CONTEXT_SCHEDULER_SLOT(0) != 0 ||
+      MMIX_CONTEXT_SCHEDULER_SLOT(NCPU - 1) != NCPU - 1 ||
       MMIX_CONTEXT_PROCESS_SLOT_BASE != NCPU ||
       MMIX_CONTEXT_AREA_TOP != MMIX_SEGMENT0_LIMIT)
     panic("context layout");
