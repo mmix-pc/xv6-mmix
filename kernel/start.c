@@ -4,7 +4,9 @@
 #include "defs.h"
 #include "diagnostic.h"
 #include "early_uart.h"
+#include "intc.h"
 #include "kcontext.h"
+#include "timer.h"
 #include "vm.h"
 
 void main(void) __attribute__((noreturn));
@@ -217,6 +219,10 @@ secondary_wait_for_global(uint64 cpu_id, uint64 bootinfo_pa)
       startup_set_stage(cpu_id, MMIX_CPU_STAGE_GLOBAL_ACQUIRED);
       kvminithart();
       trapinithart();
+      if (intc_init() != MMIX_INTC_OK || timer_init() != MMIX_TIMER_OK) {
+        startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+        startup_terminal();
+      }
       if (cpuid() != (int)cpu_id || mycpu() != &cpus[cpu_id] ||
           mycpu()->proc != 0 || mycpu()->context.state != 0 ||
           mycpu()->noff != 0 || mycpu()->intena != 0 ||
@@ -244,6 +250,8 @@ boot_secondary_context_ready(void)
   uint64 cpu_id = cpuid();
   struct cpu *c = mycpu();
   uint64 stage;
+  uint32 enabled;
+  int pending;
 
   if (cpu_id == BOOT_CPU_ID || cpu_id >= mmix_boot.info.cpu_count)
     goto fail;
@@ -255,7 +263,10 @@ boot_secondary_context_ready(void)
                               MMIX_CONTEXT_SCHEDULER_SLOT(cpu_id)) ||
       mmix_rv_read() != kernel_pagetable->rv || mmix_rk_read() != 0 ||
       intr_get() || mmix_rt_read() == 0 ||
-      mmix_rt_read() != mmix_rtt_read())
+      mmix_rt_read() != mmix_rtt_read() ||
+      intc_enabled(&enabled) != MMIX_INTC_OK || enabled != 0 ||
+      timer_pending(&pending) != MMIX_TIMER_OK || pending ||
+      timer_ticks() != 0)
     goto fail;
   if (startup_publish_context_transfer(cpu_id) < 0 ||
       startup_publish_online(cpu_id) < 0)

@@ -1,4 +1,5 @@
 #include "boot.h"
+#include "cpu.h"
 #include "timer.h"
 
 enum {
@@ -20,7 +21,7 @@ enum {
   (MMIX_TIMER_UNITS_PER_SECOND / MMIX_TIMER_TICKS_PER_SECOND)
 #define MMIX_TIMER_MAX_DEADLINE 0x7fffffffffffffffULL
 
-static volatile uint64 tick_count;
+static uint64 tick_count[MMIX_MAX_CPUS];
 
 static int
 timer_platform_valid(void)
@@ -33,7 +34,18 @@ timer_platform_valid(void)
          info->timer_irq_base == MMIX_TIMER_IRQ &&
          info->timer_irq_count == info->cpu_count &&
          info->timer_irq_count <= TIMER_IRQ_COUNT_MAX &&
-         info->timer_irq_base < info->intc_irq_count;
+         info->timer_irq_base < info->intc_irq_count &&
+         info->timer_irq_count <=
+           info->intc_irq_count - info->timer_irq_base;
+}
+
+static int
+timer_current_valid(void)
+{
+  int id = cpuid();
+
+  return timer_platform_valid() && id >= 0 &&
+         (uint64)id < mmix_boot.info.cpu_count;
 }
 
 static volatile uint64 *
@@ -46,7 +58,7 @@ static uint64
 timer_context_register(uint64 offset)
 {
   return MMIX_TIMER_CONTEXT_BASE +
-         mmix_boot.info.boot_cpu_id * MMIX_TIMER_CONTEXT_STRIDE + offset;
+         (uint64)cpuid() * MMIX_TIMER_CONTEXT_STRIDE + offset;
 }
 
 static uint64
@@ -62,16 +74,33 @@ timer_write(uint64 offset, uint64 value)
 }
 
 int
+timer_validate(void)
+{
+  return timer_platform_valid() ? MMIX_TIMER_OK : MMIX_TIMER_BAD_PLATFORM;
+}
+
+int
+timer_irq(uint32 *irq)
+{
+  if (irq == 0)
+    return MMIX_TIMER_BAD_ARGUMENT;
+  if (!timer_current_valid())
+    return MMIX_TIMER_BAD_PLATFORM;
+  *irq = mmix_boot.info.timer_irq_base + (uint32)cpuid();
+  return MMIX_TIMER_OK;
+}
+
+int
 timer_init(void)
 {
   uint64 compare;
   uint64 control;
   uint64 status;
 
-  if (!timer_platform_valid())
+  if (!timer_current_valid())
     return MMIX_TIMER_BAD_PLATFORM;
 
-  tick_count = 0;
+  tick_count[cpuid()] = 0;
   compare = timer_context_register(MMIX_TIMER_CONTEXT_COMPARE_OFFSET);
   control = timer_context_register(MMIX_TIMER_CONTEXT_CONTROL_OFFSET);
   status = timer_context_register(MMIX_TIMER_CONTEXT_STATUS_OFFSET);
@@ -91,7 +120,7 @@ timer_pending(int *pending)
 
   if (pending == 0)
     return MMIX_TIMER_BAD_ARGUMENT;
-  if (!timer_platform_valid())
+  if (!timer_current_valid())
     return MMIX_TIMER_BAD_PLATFORM;
 
   status = timer_read(timer_context_register(MMIX_TIMER_CONTEXT_STATUS_OFFSET));
@@ -106,7 +135,7 @@ timer_disable(void)
 {
   uint64 control;
 
-  if (!timer_platform_valid())
+  if (!timer_current_valid())
     return MMIX_TIMER_BAD_PLATFORM;
 
   control = timer_context_register(MMIX_TIMER_CONTEXT_CONTROL_OFFSET);
@@ -123,7 +152,7 @@ timer_acknowledge(void)
 {
   uint64 status;
 
-  if (!timer_platform_valid())
+  if (!timer_current_valid())
     return MMIX_TIMER_BAD_PLATFORM;
 
   status = timer_context_register(MMIX_TIMER_CONTEXT_STATUS_OFFSET);
@@ -141,7 +170,7 @@ timer_arm_next(void)
   uint64 now;
   uint64 next;
 
-  if (!timer_platform_valid())
+  if (!timer_current_valid())
     return MMIX_TIMER_BAD_PLATFORM;
 
   now = timer_read(MMIX_TIMER_TIME_OFFSET);
@@ -164,16 +193,20 @@ timer_arm_next(void)
 int
 timer_record_tick(void)
 {
-  if (tick_count == ~0ULL)
+  int id = cpuid();
+
+  if (!timer_current_valid())
+    return MMIX_TIMER_BAD_PLATFORM;
+  if (tick_count[id] == ~0ULL)
     return MMIX_TIMER_BAD_STATE;
-  tick_count++;
+  tick_count[id]++;
   return MMIX_TIMER_OK;
 }
 
 uint64
 timer_ticks(void)
 {
-  return tick_count;
+  return tick_count[cpuid()];
 }
 
 _Static_assert((MMIX_TIMER_UNITS_PER_SECOND % MMIX_TIMER_TICKS_PER_SECOND) == 0,

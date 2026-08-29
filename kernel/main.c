@@ -18,6 +18,7 @@ void
 main(void)
 {
   struct kalloc_stats allocator_stats;
+  uint32 timer_irq_number;
 
   if (mmix_boot.bootinfo_status != MMIX_BOOTINFO_OK)
     panic("bootinfo");
@@ -34,8 +35,10 @@ main(void)
   trapinit();         // trap vectors
   trapinithart();     // install kernel trap vector
   trapenablehart();   // enable CPU 0 program traps
-  if (intc_init() != MMIX_INTC_OK)
-    panic("intc init");
+  if (intc_validate() != MMIX_INTC_OK || timer_validate() != MMIX_TIMER_OK)
+    panic("interrupt platform");
+  if (intc_init() != MMIX_INTC_OK || timer_init() != MMIX_TIMER_OK)
+    panic("interrupt context");
   consoleinit();
   printkinit();
   binit();            // buffer cache
@@ -48,11 +51,10 @@ main(void)
     panic("CPU online");
 
   // CPU 0 retains the single-core service path after every CPU is online.
-  if (timer_init() != MMIX_TIMER_OK)
-    panic("timer init");
   if (timer_arm_next() != MMIX_TIMER_OK)
     panic("timer arm");
-  if (intc_set_enabled(MMIX_TIMER_IRQ, 1) != MMIX_INTC_OK)
+  if (timer_irq(&timer_irq_number) != MMIX_TIMER_OK ||
+      intc_set_enabled(timer_irq_number, 1) != MMIX_INTC_OK)
     panic("timer irq enable");
   uartenable();
   userinit();         // first user process

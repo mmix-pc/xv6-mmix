@@ -122,6 +122,8 @@ trap_device_service(uint64 rq, uint64 restore_rk, uint64 rxx, uint32 *claim,
 {
   int pending;
   int status;
+  int cpu_id = cpuid();
+  uint32 timer_irq_number;
 
   *claim = 0;
   *preempt = 0;
@@ -136,18 +138,24 @@ trap_device_service(uint64 rq, uint64 restore_rk, uint64 rxx, uint32 *claim,
   if (status != MMIX_INTC_OK)
     return "invalid claim";
   if (*claim == UART0_IRQ) {
+    if (cpu_id != BOOT_CPU_ID)
+      return "foreign claim";
     uartintr();
     if (intc_complete(*claim) != MMIX_INTC_OK)
       return "controller complete";
     return 0;
   }
   if (*claim == VIRTIO0_IRQ) {
+    if (cpu_id != BOOT_CPU_ID)
+      return "foreign claim";
     virtio_disk_intr();
     if (intc_complete(*claim) != MMIX_INTC_OK)
       return "controller complete";
     return 0;
   }
-  if (*claim != MMIX_TIMER_IRQ)
+  if (timer_irq(&timer_irq_number) != MMIX_TIMER_OK)
+    return "timer context";
+  if (*claim != timer_irq_number)
     return "unexpected claim";
   if (timer_pending(&pending) != MMIX_TIMER_OK || !pending)
     return "timer not pending";
@@ -160,11 +168,13 @@ trap_device_service(uint64 rq, uint64 restore_rk, uint64 rxx, uint32 *claim,
     return "controller complete";
   if (timer_record_tick() != MMIX_TIMER_OK)
     return "tick overflow";
-  acquire(&tickslock);
-  ticks++;
-  wakeup(&ticks);
-  release(&tickslock);
-  *preempt = 1;
+  if (cpu_id == BOOT_CPU_ID) {
+    acquire(&tickslock);
+    ticks++;
+    wakeup(&ticks);
+    release(&tickslock);
+    *preempt = 1;
+  }
 
   return 0;
 }
@@ -522,6 +532,7 @@ usertrapret(void)
   struct trapframe *trapframe;
   uint64 alias;
   uint32 enabled_irqs;
+  uint32 timer_irq_number;
 
   mmix_intr_mask_write(0);
   c = mycpu();
@@ -532,8 +543,9 @@ usertrapret(void)
     panic("user return owner");
   if (killed(p))
     kexit(-1);
-  if (intc_enabled(&enabled_irqs) != MMIX_INTC_OK ||
-      (enabled_irqs & (1U << MMIX_TIMER_IRQ)) == 0)
+  if (timer_irq(&timer_irq_number) != MMIX_TIMER_OK ||
+      intc_enabled(&enabled_irqs) != MMIX_INTC_OK ||
+      (enabled_irqs & (1U << timer_irq_number)) == 0)
     panic("user return timer");
   trapframe = p->trapframe;
   if (trapframe == 0 || !kalloc_page_is_managed(trapframe) ||

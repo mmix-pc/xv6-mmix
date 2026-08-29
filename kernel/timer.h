@@ -13,7 +13,9 @@ enum mmix_timer_status {
   MMIX_TIMER_BAD_DEADLINE = -4,
 };
 
+int timer_validate(void);
 int timer_init(void);
+int timer_irq(uint32 *);
 int timer_pending(int *pending);
 int timer_disable(void);
 int timer_acknowledge(void);

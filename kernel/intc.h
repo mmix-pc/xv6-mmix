@@ -10,6 +10,7 @@ enum mmix_intc_status {
   MMIX_INTC_BAD_STATE = -4,
 };
 
+int intc_validate(void);
 int intc_init(void);
 int intc_pending(uint32 *pending);
 int intc_enabled(uint32 *enabled);

@@ -1,4 +1,5 @@
 #include "boot.h"
+#include "cpu.h"
 #include "intc.h"
 
 enum {
@@ -19,8 +20,19 @@ intc_platform_valid(void)
 
   return mmix_boot.bootinfo_status == MMIX_BOOTINFO_OK &&
          (info->intc_base & (MMIX_INTC_REGISTER_SIZE - 1)) == 0 &&
+         info->boot_cpu_id == BOOT_CPU_ID && info->cpu_count > 0 &&
+         info->cpu_count <= MMIX_MAX_CPUS &&
          info->intc_irq_count > 1 &&
          info->intc_irq_count <= MMIX_INTC_MAX_IRQ_COUNT;
+}
+
+static int
+intc_current_valid(void)
+{
+  int id = cpuid();
+
+  return intc_platform_valid() && id >= 0 &&
+         (uint64)id < mmix_boot.info.cpu_count;
 }
 
 static int
@@ -40,7 +52,7 @@ static uint64
 intc_context_register(uint64 offset)
 {
   return MMIX_INTC_CONTEXT_BASE +
-         mmix_boot.info.boot_cpu_id * MMIX_INTC_CONTEXT_STRIDE + offset;
+         (uint64)cpuid() * MMIX_INTC_CONTEXT_STRIDE + offset;
 }
 
 static uint32
@@ -56,11 +68,17 @@ intc_write(uint64 offset, uint32 value)
 }
 
 int
+intc_validate(void)
+{
+  return intc_platform_valid() ? MMIX_INTC_OK : MMIX_INTC_BAD_PLATFORM;
+}
+
+int
 intc_init(void)
 {
   uint64 enable;
 
-  if (!intc_platform_valid())
+  if (!intc_current_valid())
     return MMIX_INTC_BAD_PLATFORM;
 
   enable = intc_context_register(MMIX_INTC_CONTEXT_ENABLE_OFFSET);
@@ -75,7 +93,7 @@ intc_pending(uint32 *pending)
 {
   if (pending == 0)
     return MMIX_INTC_BAD_ARGUMENT;
-  if (!intc_platform_valid())
+  if (!intc_current_valid())
     return MMIX_INTC_BAD_PLATFORM;
 
   *pending = intc_read(MMIX_INTC_PENDING_OFFSET);
@@ -87,7 +105,7 @@ intc_enabled(uint32 *enabled)
 {
   if (enabled == 0)
     return MMIX_INTC_BAD_ARGUMENT;
-  if (!intc_platform_valid())
+  if (!intc_current_valid())
     return MMIX_INTC_BAD_PLATFORM;
 
   *enabled = intc_read(intc_context_register(MMIX_INTC_CONTEXT_ENABLE_OFFSET));
@@ -101,6 +119,8 @@ intc_set_enabled(uint32 irq, int enabled)
   uint32 mask;
   uint32 value;
 
+  if (!intc_current_valid())
+    return MMIX_INTC_BAD_PLATFORM;
   if (!intc_irq_valid(irq))
     return MMIX_INTC_BAD_IRQ;
   if (enabled != 0 && enabled != 1)
@@ -123,7 +143,7 @@ intc_claim(uint32 *irq)
 
   if (irq == 0)
     return MMIX_INTC_BAD_ARGUMENT;
-  if (!intc_platform_valid())
+  if (!intc_current_valid())
     return MMIX_INTC_BAD_PLATFORM;
 
   claimed = intc_read(intc_context_register(MMIX_INTC_CONTEXT_CLAIM_OFFSET));
@@ -138,6 +158,8 @@ intc_claim(uint32 *irq)
 int
 intc_complete(uint32 irq)
 {
+  if (!intc_current_valid())
+    return MMIX_INTC_BAD_PLATFORM;
   if (!intc_irq_valid(irq))
     return MMIX_INTC_BAD_IRQ;
 
