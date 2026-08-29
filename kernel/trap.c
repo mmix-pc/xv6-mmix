@@ -6,6 +6,7 @@
 #include "kalloc.h"
 #include "diagnostic.h"
 #include "intc.h"
+#include "ipi.h"
 #include "timer.h"
 #include "defs.h"
 
@@ -29,6 +30,9 @@ trap_report(enum mmix_trap_class event, const char *cause,
   uint32 enabled_irqs = ~(uint32)0;
   uint32 pending_irqs = ~(uint32)0;
   int timer_is_pending = -1;
+  int ipi_is_pending = -1;
+  uint64 ipi_received = ~0ULL;
+  uint64 ipi_acknowledged_generation = ~0ULL;
 
   if (event == MMIX_TRAP_FORCED)
     event_class = "forced";
@@ -43,6 +47,12 @@ trap_report(enum mmix_trap_class event, const char *cause,
     pending_irqs = ~(uint32)0;
   if (timer_pending(&timer_is_pending) != MMIX_TIMER_OK)
     timer_is_pending = -1;
+  if (ipi_pending(&ipi_is_pending) != MMIX_IPI_OK)
+    ipi_is_pending = -1;
+  if (ipi_progress(&ipi_received, &ipi_acknowledged_generation) != MMIX_IPI_OK) {
+    ipi_received = ~0ULL;
+    ipi_acknowledged_generation = ~0ULL;
+  }
 
   struct mmix_trap_diagnostic diagnostic = {
     .from_user = 0,
@@ -67,6 +77,9 @@ trap_report(enum mmix_trap_class event, const char *cause,
     .intc_enabled = enabled_irqs,
     .intc_claim = claim,
     .timer_pending = timer_is_pending,
+    .ipi_pending = ipi_is_pending,
+    .ipi_received = ipi_received,
+    .ipi_acknowledged = ipi_acknowledged_generation,
   };
 
   diagnostic_trap(&diagnostic);
@@ -117,26 +130,36 @@ trap_preempt(struct mmix_trap_state *state, uint32 claim)
 }
 
 static const char *
-trap_device_service(uint64 rq, uint64 restore_rk, uint64 rxx, uint32 *claim,
-                    int *preempt)
+trap_interrupt_service(uint64 rq, uint64 restore_rk, uint64 rxx,
+                       uint64 *serviced, uint32 *claim, int *preempt)
 {
   int pending;
   int status;
   int cpu_id = cpuid();
   uint32 timer_irq_number;
 
+  *serviced = 0;
   *claim = 0;
   *preempt = 0;
-  if (!mmix_rq_intc_pending(rq, restore_rk))
+  if (!mmix_rq_interrupt_pending(rq, restore_rk))
     return "masked request";
   if (rxx != MMIX_DYNAMIC_TRAP_RESUME_NEXT)
     return "unsupported resume";
+
+  if (mmix_rq_ipi_pending(rq, restore_rk) &&
+      !mmix_rq_intc_pending(rq, restore_rk)) {
+    if (ipi_service() != MMIX_IPI_OK)
+      return "IPI service";
+    *serviced = MMIX_RQ_IPI;
+    return 0;
+  }
 
   status = intc_claim(claim);
   if (status == MMIX_INTC_NO_IRQ)
     return "zero claim";
   if (status != MMIX_INTC_OK)
     return "invalid claim";
+  *serviced = MMIX_RQ_INTC;
   if (*claim == UART0_IRQ) {
     if (cpu_id != BOOT_CPU_ID)
       return "foreign claim";
@@ -184,16 +207,17 @@ trap_external(struct mmix_trap_state *state)
 {
   uint32 irq;
   int preempt;
+  uint64 serviced;
   const char *error;
 
-  error = trap_device_service(state->rq, state->restore_rk, state->rxx, &irq,
-                              &preempt);
+  error = trap_interrupt_service(state->rq, state->restore_rk, state->rxx,
+                                 &serviced, &irq, &preempt);
   if (error != 0)
     trap_stop(MMIX_TRAP_EXTERNAL, error, state, irq);
 
-  // GET/PUT rQ is a request handoff. Do not restore the serviced controller
-  // bit or RESUME would immediately deliver the same dynamic trap again.
-  state->rq &= ~MMIX_RQ_INTC;
+  // GET/PUT rQ is a request handoff. Preserve any independent source that
+  // arrived with the one serviced by this entry.
+  state->rq &= ~serviced;
 
   if (preempt)
     trap_preempt(state, irq);
@@ -211,6 +235,9 @@ trapframe_report(int from_user, const char *event_class, const char *cause,
   uint32 enabled_irqs = ~(uint32)0;
   uint32 pending_irqs = ~(uint32)0;
   int timer_is_pending = -1;
+  int ipi_is_pending = -1;
+  uint64 ipi_received = ~0ULL;
+  uint64 ipi_acknowledged_generation = ~0ULL;
 
   copyin(p->pagetable, (char *)&fp,
          address + (MMIX_ABI_FP - MMIX_ABI_GLOBAL_FIRST) * sizeof(uint64),
@@ -224,6 +251,12 @@ trapframe_report(int from_user, const char *event_class, const char *cause,
     pending_irqs = ~(uint32)0;
   if (timer_pending(&timer_is_pending) != MMIX_TIMER_OK)
     timer_is_pending = -1;
+  if (ipi_pending(&ipi_is_pending) != MMIX_IPI_OK)
+    ipi_is_pending = -1;
+  if (ipi_progress(&ipi_received, &ipi_acknowledged_generation) != MMIX_IPI_OK) {
+    ipi_received = ~0ULL;
+    ipi_acknowledged_generation = ~0ULL;
+  }
 
   struct mmix_trap_diagnostic diagnostic = {
     .from_user = from_user,
@@ -248,6 +281,9 @@ trapframe_report(int from_user, const char *event_class, const char *cause,
     .intc_enabled = enabled_irqs,
     .intc_claim = claim,
     .timer_pending = timer_is_pending,
+    .ipi_pending = ipi_is_pending,
+    .ipi_received = ipi_received,
+    .ipi_acknowledged = ipi_acknowledged_generation,
   };
 
   diagnostic_trap(&diagnostic);
@@ -421,15 +457,18 @@ usertrap(void)
   } else if (user_translation_trap(p)) {
     // RESUME 1 installs rZZ and retries the instruction that missed.
   } else if (trapframe->rxx == MMIX_DYNAMIC_TRAP_RESUME_NEXT &&
-             mmix_rq_intc_pending(trapframe->rq, trapframe->user_rk)) {
+             mmix_rq_interrupt_pending(trapframe->rq,
+                                       trapframe->user_rk)) {
     uint32 irq;
     int preempt;
-    const char *error = trap_device_service(
-      trapframe->rq, trapframe->user_rk, trapframe->rxx, &irq, &preempt);
+    uint64 serviced;
+    const char *error = trap_interrupt_service(
+      trapframe->rq, trapframe->user_rk, trapframe->rxx, &serviced, &irq,
+      &preempt);
 
     if (error != 0)
       user_trap_stop(error, p, irq);
-    trapframe->rq &= ~MMIX_RQ_INTC;
+    trapframe->rq &= ~serviced;
     // The GET performed by user entry is CPU state, not process state. Finish
     // its handoff before another scheduled context can enable dynamic traps.
     mmix_rq_write(trapframe->rq);

@@ -6,6 +6,7 @@
 #include "boot.h"
 #include "diagnostic.h"
 #include "intc.h"
+#include "ipi.h"
 #include "kalloc.h"
 #include "kcontext.h"
 #include "timer.h"
@@ -35,9 +36,11 @@ main(void)
   trapinit();         // trap vectors
   trapinithart();     // install kernel trap vector
   trapenablehart();   // enable CPU 0 program traps
-  if (intc_validate() != MMIX_INTC_OK || timer_validate() != MMIX_TIMER_OK)
+  if (intc_validate() != MMIX_INTC_OK || timer_validate() != MMIX_TIMER_OK ||
+      ipi_validate() != MMIX_IPI_OK)
     panic("interrupt platform");
-  if (intc_init() != MMIX_INTC_OK || timer_init() != MMIX_TIMER_OK)
+  if (intc_init() != MMIX_INTC_OK || timer_init() != MMIX_TIMER_OK ||
+      ipi_init() != MMIX_IPI_OK)
     panic("interrupt context");
   consoleinit();
   printkinit();

@@ -540,6 +540,19 @@ mmix_rq_intc_pending(uint64 requests, uint64 mask)
   return (mmix_rq_deliverable(requests, mask) & MMIX_RQ_INTC) != 0;
 }
 
+static inline int
+mmix_rq_ipi_pending(uint64 requests, uint64 mask)
+{
+  return (mmix_rq_deliverable(requests, mask) & MMIX_RQ_IPI) != 0;
+}
+
+static inline int
+mmix_rq_interrupt_pending(uint64 requests, uint64 mask)
+{
+  return (mmix_rq_deliverable(requests, mask) &
+          MMIX_KERNEL_INTERRUPT_MASK) != 0;
+}
+
 static inline uint64
 mmix_ra_disable_trips(uint64 value)
 {

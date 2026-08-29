@@ -20,6 +20,7 @@ OBJS = \
   $K/exec.o \
   $K/intc.o \
   $K/timer.o \
+  $K/ipi.o \
   $K/kalloc.o \
   $K/spinlock.o \
   $K/sleeplock.o \

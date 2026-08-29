@@ -204,5 +204,11 @@ diagnostic_trap(const struct mmix_trap_diagnostic *diagnostic)
   diagnostic_put_u64(diagnostic->intc_claim);
   diagnostic_puts(" timer-pending=");
   diagnostic_put_int(diagnostic->timer_pending);
+  diagnostic_puts(" ipi-pending=");
+  diagnostic_put_int(diagnostic->ipi_pending);
+  diagnostic_puts(" ipi-received=");
+  diagnostic_put_u64(diagnostic->ipi_received);
+  diagnostic_puts(" ipi-acknowledged=");
+  diagnostic_put_u64(diagnostic->ipi_acknowledged);
   early_uart_putc('\n');
 }

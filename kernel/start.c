@@ -5,6 +5,7 @@
 #include "diagnostic.h"
 #include "early_uart.h"
 #include "intc.h"
+#include "ipi.h"
 #include "kcontext.h"
 #include "timer.h"
 #include "vm.h"
@@ -219,7 +220,8 @@ secondary_wait_for_global(uint64 cpu_id, uint64 bootinfo_pa)
       startup_set_stage(cpu_id, MMIX_CPU_STAGE_GLOBAL_ACQUIRED);
       kvminithart();
       trapinithart();
-      if (intc_init() != MMIX_INTC_OK || timer_init() != MMIX_TIMER_OK) {
+      if (intc_init() != MMIX_INTC_OK || timer_init() != MMIX_TIMER_OK ||
+          ipi_init() != MMIX_IPI_OK) {
         startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
         startup_terminal();
       }
@@ -252,6 +254,9 @@ boot_secondary_context_ready(void)
   uint64 stage;
   uint32 enabled;
   int pending;
+  int ipi_is_pending;
+  uint64 ipi_received;
+  uint64 ipi_acknowledged_generation;
 
   if (cpu_id == BOOT_CPU_ID || cpu_id >= mmix_boot.info.cpu_count)
     goto fail;
@@ -266,7 +271,11 @@ boot_secondary_context_ready(void)
       mmix_rt_read() != mmix_rtt_read() ||
       intc_enabled(&enabled) != MMIX_INTC_OK || enabled != 0 ||
       timer_pending(&pending) != MMIX_TIMER_OK || pending ||
-      timer_ticks() != 0)
+      timer_ticks() != 0 ||
+      ipi_pending(&ipi_is_pending) != MMIX_IPI_OK || ipi_is_pending ||
+      ipi_progress(&ipi_received, &ipi_acknowledged_generation) !=
+        MMIX_IPI_OK ||
+      ipi_received != 0 || ipi_acknowledged_generation != 0)
     goto fail;
   if (startup_publish_context_transfer(cpu_id) < 0 ||
       startup_publish_online(cpu_id) < 0)

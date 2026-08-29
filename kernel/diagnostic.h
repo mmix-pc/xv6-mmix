@@ -27,6 +27,9 @@ struct mmix_trap_diagnostic {
   uint32 intc_enabled;
   uint32 intc_claim;
   int timer_pending;
+  int ipi_pending;
+  uint64 ipi_received;
+  uint64 ipi_acknowledged;
 };
 
 void diagnostic_boot(const struct mmix_boot_state *boot);
