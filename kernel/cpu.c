@@ -1,21 +1,20 @@
 #include "mmix.h"
 #include "cpu.h"
 
-uint64 mmix_trap_rk_shadow;
-
 void
 mmix_intr_mask_write(uint64 mask)
 {
+  struct cpu *c = mycpu();
   uint64 active = mmix_rk_read();
 
-  if ((active & MMIX_KERNEL_INTC_MASK) != 0 &&
-      (mask & MMIX_KERNEL_INTC_MASK) == 0) {
-    // Close external delivery before publishing a shadow without INTC.
+  if ((active & MMIX_KERNEL_INTERRUPT_MASK) != 0 &&
+      (mask & MMIX_KERNEL_INTERRUPT_MASK) == 0) {
+    // Close dynamic delivery before publishing a restrictive shadow.
     mmix_rk_write(mask);
-    mmix_trap_rk_shadow = mask;
+    c->trap.rk_shadow = mask;
   } else {
-    // Prepare trap entry before opening external delivery.
-    mmix_trap_rk_shadow = mask;
+    // Prepare this CPU's trap entry before opening dynamic delivery.
+    c->trap.rk_shadow = mask;
     mmix_rk_write(mask);
   }
 }
@@ -29,13 +28,13 @@ intr_get(void)
 void
 intr_off(void)
 {
-  mmix_intr_mask_write(mmix_rk_read() & ~MMIX_KERNEL_INTC_MASK);
+  mmix_intr_mask_write(mmix_rk_read() & ~MMIX_KERNEL_INTERRUPT_MASK);
 }
 
 void
 intr_on(void)
 {
-  mmix_intr_mask_write(mmix_rk_read() | MMIX_KERNEL_INTC_MASK);
+  mmix_intr_mask_write(mmix_rk_read() | MMIX_KERNEL_INTERRUPT_MASK);
 }
 
 void

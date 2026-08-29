@@ -13,8 +13,9 @@ extern char kernel_text_end[];
 extern char mmix_kernel_trap_entry[];
 extern void mmix_user_resume(void);
 
-volatile uint64 mmix_trap_active;
 uint64 mmix_trap_vector;
+// P2.4 keeps user execution on CPU 0. Kernel trap entry uses rV, not this
+// CPU-0-owned scratch pointer, to classify concurrent secondary traps.
 volatile uint64 mmix_user_trapframe;
 uint ticks;
 struct spinlock tickslock;
@@ -102,17 +103,17 @@ trap_preempt(struct mmix_trap_state *state, uint32 claim)
   // that process take traps, then reclaim the single-CPU trap entry on return.
   // Complete the rQ handoff now because the assembly restore is also suspended.
   mmix_rq_write(state->rq);
-  mmix_trap_active = 0;
+  c->trap.active = 0;
   yield();
-  if (mmix_trap_active != 0)
+  if (c->trap.active != 0)
     trap_stop(MMIX_TRAP_EXTERNAL, "preemption active", state, claim);
   // A voluntary scheduler path may leave only the program mask enabled.
   // Re-enter the suspended dynamic trap with the hardware mask cleared.
   mmix_intr_mask_write(0);
   if (mmix_rk_read() != 0)
     trap_stop(MMIX_TRAP_EXTERNAL, "preemption mask", state, claim);
-  mmix_trap_rk_shadow = state->restore_rk;
-  mmix_trap_active = 1;
+  c->trap.rk_shadow = state->restore_rk;
+  c->trap.active = 1;
 }
 
 static const char *
@@ -378,13 +379,15 @@ user_syscall_trap(struct proc *p)
 void
 usertrap(void)
 {
+  struct cpu *c = mycpu();
   struct proc *p = myproc();
   struct trapframe *trapframe;
   uint64 cause;
 
   mmix_intr_mask_write(0);
   if (p == 0 || p->state != RUNNING || holding(&p->lock) ||
-      mmix_user_trapframe != 0 || mmix_trap_active != 0)
+      cpuid() != BOOT_CPU_ID || mmix_user_trapframe != 0 ||
+      c->trap.active != 0)
     panic("user trap owner");
   trapframe = p->trapframe;
   if (trapframe == 0 || trapframe->flags != MMIX_PROC_TRAPFRAME_READY ||
@@ -453,7 +456,6 @@ trapinit(void)
   uint64 entry = (uint64)mmix_kernel_trap_entry;
 
   mmix_intr_mask_write(0);
-  mmix_trap_active = 0;
   ticks = 0;
   initlock(&tickslock, "time");
   if (mmix_trap_vector_make(entry, (uint64)kernel_text_end, &mmix_trap_vector) <
@@ -468,6 +470,7 @@ trapinit(void)
 void
 trapinithart(void)
 {
+  struct cpu *c = mycpu();
   uint64 cpu_id = cpuid();
   uint64 requests;
   uint64 ro = mmix_ro_read();
@@ -475,7 +478,9 @@ trapinithart(void)
   uint64 sp = mmix_sp_read();
 
   mmix_rk_write(0);
-  if (mmix_trap_vector == 0 || mmix_trap_active != 0)
+  c->trap.active = 0;
+  c->trap.rk_shadow = 0;
+  if (mmix_trap_vector == 0)
     panic("trap state");
   if (ro < BOOT_REGISTER_STACK_BASE(cpu_id) ||
       ro >= BOOT_REGISTER_STACK_LIMIT(cpu_id) ||
@@ -521,8 +526,9 @@ usertrapret(void)
   mmix_intr_mask_write(0);
   c = mycpu();
   p = c->proc;
-  if (p == 0 || p->state != RUNNING || holding(&p->lock) || c->noff != 0 ||
-      mmix_user_trapframe != 0 || mmix_trap_active != 0)
+  if (cpuid() != BOOT_CPU_ID || p == 0 || p->state != RUNNING ||
+      holding(&p->lock) || c->noff != 0 || mmix_user_trapframe != 0 ||
+      c->trap.active != 0)
     panic("user return owner");
   if (killed(p))
     kexit(-1);
@@ -561,7 +567,7 @@ usertrapret(void)
   asm volatile("" : : : "memory");
 
   if (c->proc != p || p->trapframe != trapframe ||
-      mmix_user_trapframe != 0 || mmix_trap_active != 0 ||
+      mmix_user_trapframe != 0 || c->trap.active != 0 ||
       trapframe->kernel_state != 0 ||
       trapframe->flags != MMIX_PROC_TRAPFRAME_READY ||
       trapframe->reserved != 0 ||
@@ -576,17 +582,18 @@ usertrapret(void)
 void
 mmix_kernel_trap(enum mmix_trap_class event, struct mmix_trap_state *state)
 {
+  struct cpu *c = mycpu();
   uint64 cause = state->rxx & MMIX_RQ_PROGRAM_MASK;
 
-  if (mmix_trap_active != 1 || state->rg != MMIX_TRAP_GLOBAL_FIRST ||
-      state->restore_rk != mmix_trap_rk_shadow || mmix_rk_read() != 0)
+  if (c->trap.active != 1 || state->rg != MMIX_TRAP_GLOBAL_FIRST ||
+      state->restore_rk != c->trap.rk_shadow || mmix_rk_read() != 0)
     trap_stop(event, "inconsistent state", state, 0);
 
   if (event == MMIX_TRAP_FORCED) {
     if (state->rxx ==
         (MMIX_DYNAMIC_TRAP_RESUME_NEXT | MMIX_KERNEL_FORCED_TRAP_INSN)) {
       trap_report(event, "expected", state, 0);
-      mmix_trap_rk_shadow = state->restore_rk;
+      c->trap.rk_shadow = state->restore_rk;
       return;
     }
     trap_stop(event, "unexpected instruction", state, 0);
@@ -608,7 +615,7 @@ mmix_kernel_trap(enum mmix_trap_class event, struct mmix_trap_state *state)
     trap_external(state);
     // Interrupt-side locks temporarily publish a zero mask. Restore the
     // interrupted mask before RESUME can immediately deliver another source.
-    mmix_trap_rk_shadow = state->restore_rk;
+    c->trap.rk_shadow = state->restore_rk;
     return;
   }
   trap_stop(event, "unknown", state, 0);

@@ -108,14 +108,18 @@
 #define MMIX_RQ_PROGRAM_P     0x0000000100000000
 #define MMIX_RQ_PROGRAM_MASK  0x000000ff00000000
 #define MMIX_RQ_INTC          0x0000000000000100
+#define MMIX_RQ_IPI           0x0000000000000200
 #define MMIX_RK_INTC          MMIX_RQ_INTC
+#define MMIX_RK_IPI           MMIX_RQ_IPI
 
 #define MMIX_KERNEL_PROGRAM_MASK                                      \
   (MMIX_RQ_PROGRAM_R | MMIX_RQ_PROGRAM_W | MMIX_RQ_PROGRAM_X |       \
    MMIX_RQ_PROGRAM_B)
-#define MMIX_KERNEL_INTC_MASK MMIX_RK_INTC
+#define MMIX_KERNEL_INTC_MASK      MMIX_RK_INTC
+#define MMIX_KERNEL_IPI_MASK       MMIX_RK_IPI
+#define MMIX_KERNEL_INTERRUPT_MASK (MMIX_RK_INTC | MMIX_RK_IPI)
 #define MMIX_KERNEL_TRAP_MASK                                         \
-  (MMIX_KERNEL_PROGRAM_MASK | MMIX_KERNEL_INTC_MASK)
+  (MMIX_KERNEL_PROGRAM_MASK | MMIX_KERNEL_INTERRUPT_MASK)
 
 // rA contains arithmetic event status in its low byte and the corresponding
 // trip enables in the next byte. Phase 1 keeps every arithmetic trip disabled.
@@ -509,7 +513,6 @@ mmix_rk_write(uint64 value)
   asm volatile("PUT rK, %0" : : "r"(value) : "memory");
 }
 
-extern uint64 mmix_trap_rk_shadow;
 void mmix_intr_mask_write(uint64 mask);
 
 static inline uint64
@@ -521,7 +524,8 @@ mmix_rq_program(uint64 value)
 static inline uint64
 mmix_kernel_mask(uint64 device_mask)
 {
-  return MMIX_KERNEL_PROGRAM_MASK | (device_mask & MMIX_KERNEL_INTC_MASK);
+  return MMIX_KERNEL_PROGRAM_MASK |
+         (device_mask & MMIX_KERNEL_INTERRUPT_MASK);
 }
 
 static inline uint64
@@ -545,7 +549,8 @@ mmix_ra_disable_trips(uint64 value)
 static inline int
 mmix_intr_get(void)
 {
-  return (mmix_rk_read() & MMIX_KERNEL_INTC_MASK) != 0;
+  return (mmix_rk_read() & MMIX_KERNEL_INTERRUPT_MASK) ==
+         MMIX_KERNEL_INTERRUPT_MASK;
 }
 
 // SYNC 6 is the architectural full translation-cache invalidation. Current
@@ -563,12 +568,16 @@ mmix_rv_publish(uint64 value)
 _Static_assert(sizeof(uint64) == 8, "MMIX octas must be 8 bytes");
 _Static_assert(MMIX_KERNEL_PROGRAM_MASK == 0x000000e400000000,
                "kernel program mask must match the trap ABI");
-_Static_assert(MMIX_KERNEL_TRAP_MASK == 0x000000e400000100,
+_Static_assert(MMIX_KERNEL_INTERRUPT_MASK ==
+                 (IPI_REQUEST_MASK | MMIX_RK_INTC),
+               "kernel interrupt mask must match the platform ABI");
+_Static_assert(MMIX_KERNEL_TRAP_MASK == 0x000000e400000300,
                "kernel trap mask must match the platform ABI");
 _Static_assert((MMIX_KERNEL_FORCED_TRAP_INSN & MMIX_RQ_PROGRAM_MASK) == 0,
                "kernel forced trap must not resemble a program cause");
-_Static_assert((MMIX_RQ_PROGRAM_MASK & MMIX_RQ_INTC) == 0,
-               "program and controller requests must not overlap");
+_Static_assert((MMIX_RQ_PROGRAM_MASK & MMIX_KERNEL_INTERRUPT_MASK) == 0 &&
+                 (MMIX_RQ_INTC & MMIX_RQ_IPI) == 0,
+               "program, controller, and IPI requests must not overlap");
 _Static_assert((KERNEL_LOAD & (MMIX_TRAP_VECTOR_ALIGN - 1)) == 0 &&
                  KERNEL_LIMIT < MMIX_PHYSICAL_ALIAS_BIT,
                "kernel text must admit a negative trap alias");
@@ -663,6 +672,8 @@ _Static_assert(MMIX_KERNEL_RV == MMIX_RV_BUILD(MMIX_KERNEL_B1, MMIX_KERNEL_B2,
                                                MMIX_KERNEL_S, MMIX_KERNEL_R,
                                                MMIX_KERNEL_N, MMIX_KERNEL_F),
                "kernel rV literal must match its named fields");
+_Static_assert(MMIX_KERNEL_B1 != MMIX_USER_B1,
+               "trap entry must distinguish kernel and user rV layouts");
 _Static_assert(MMIX_RV_B1(MMIX_KERNEL_RV) == MMIX_KERNEL_B1 &&
                  MMIX_RV_B2(MMIX_KERNEL_RV) == MMIX_KERNEL_B2 &&
                  MMIX_RV_B3(MMIX_KERNEL_RV) == MMIX_KERNEL_B3 &&

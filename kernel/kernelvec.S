@@ -1,16 +1,28 @@
 #include "mmix.h"
+#include "cpu.h"
 #include "proc.h"
+
+.macro MMIX_CPU_FIELD_ADDRESS result, scratch, offset
+        GET \result,rU
+        SRU \result,\result,MMIX_RU_CPU_ID_SHIFT
+        MULU \result,\result,MMIX_CPU_SIZE
+        GETA \scratch,cpus
+        ADDU \result,\result,\scratch
+        ADDU \result,\result,\offset
+.endm
 
 .section .text
 .p2align 4
 .global mmix_kernel_trap_entry
 .type mmix_kernel_trap_entry,@function
 mmix_kernel_trap_entry:
-        // A published process trapframe selects the user continuation path.
-        // $255 is scratch because hardware has already preserved its user or
-        // kernel value in rBB; rJ itself remains readable until the push.
-        GETA r255,mmix_user_trapframe
-        LDOU r255,r255,0
+        // Translation state, rather than CPU 0's user scratch pointer,
+        // distinguishes a user continuation from a concurrent kernel trap.
+        // $255 is scratch because hardware preserved its interrupted value in
+        // rBB; rJ itself remains readable until the push.
+        GET r255,rV
+        SRU r255,r255,MMIX_RV_B1_SHIFT
+        CMPU r255,r255,MMIX_KERNEL_B1
         BNZ r255,mmix_user_trap_entry
 
         // Preserve the interrupted rJ and register-stack boundary before
@@ -26,13 +38,14 @@ mmix_kernel_trap_entry:
         GET r255,rS
         PUT rB,r255
 
-        // A nested trap cannot safely reuse the partially populated frame.
-        // GETA retains the negative physical alias of this entry point.
-        GETA r255,mmix_trap_active
-        LDOU r255,r255,0
+        // A nested trap cannot safely reuse this CPU's partially populated
+        // frame. rJ is free after its interrupted value was retained in rW.
+        PUT rJ,r254
+        MMIX_CPU_FIELD_ADDRESS r254,r255,MMIX_CPU_TRAP_ACTIVE_OFFSET
+        LDOU r255,r254,0
         BNZ r255,.Lnested_trap
-        GETA r255,mmix_trap_active
-        STCO 1,r255,0
+        STCO 1,r254,0
+        GET r254,rJ
 
         // Pushing through $255 preserves every interrupted local register and
         // starts the handler with an empty local-register window.
@@ -40,11 +53,14 @@ mmix_kernel_trap_entry:
 
 .Ltrap_resume:
         // The frame remains immediately below the restored software stack.
+        // Clear this CPU's ownership before restoring the interrupted rJ.
+        PUT rJ,r254
+        MMIX_CPU_FIELD_ADDRESS r254,r255,MMIX_CPU_TRAP_ACTIVE_OFFSET
+        STCO 0,r254,0
+        GET r254,rJ
         NEGU r255,0,MMIX_TRAP_STATE_SIZE-MMIX_TRAP_RJ_OFFSET
         LDOU r255,r254,r255
         PUT rJ,r255
-        GETA r255,mmix_trap_active
-        STCO 0,r255,0
         NEGU r255,0,MMIX_TRAP_STATE_SIZE-MMIX_TRAP_RESTORE_RK_OFFSET
         LDOU r255,r254,r255
         RESUME 1
@@ -99,8 +115,8 @@ mmix_kernel_trap_entry:
         STOU r1,r254,MMIX_TRAP_RZZ_OFFSET
         GET r1,rQ
         STOU r1,r254,MMIX_TRAP_RQ_OFFSET
-        GETA r1,mmix_trap_rk_shadow
-        LDOU r1,r1,0
+        MMIX_CPU_FIELD_ADDRESS r2,r1,MMIX_CPU_TRAP_RK_SHADOW_OFFSET
+        LDOU r1,r2,0
         STOU r1,r254,MMIX_TRAP_RESTORE_RK_OFFSET
 
         SETL r0,256
@@ -151,7 +167,7 @@ mmix_kernel_trap_entry:
         LDOU r1,r254,MMIX_TRAP_RQ_OFFSET
         LDOU r2,r254,MMIX_TRAP_RESTORE_RK_OFFSET
         AND r1,r1,r2
-        SETL r2,MMIX_RQ_INTC
+        SETL r2,MMIX_KERNEL_INTERRUPT_MASK
         AND r1,r1,r2
         BZ r1,.Lclass_ready
         SETL r231,MMIX_TRAP_CLASS_EXTERNAL

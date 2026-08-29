@@ -26,7 +26,7 @@
 #define MMIX_PROC_TRAPFRAME_SIZE                144
 #define MMIX_PROC_TRAPFRAME_ALIGN               8
 
-#define MMIX_PROC_USER_RK (MMIX_RQ_PROGRAM_MASK | MMIX_RQ_INTC)
+#define MMIX_PROC_USER_RK (MMIX_RQ_PROGRAM_MASK | MMIX_KERNEL_INTERRUPT_MASK)
 
 // The CPU scratch pointer is published only while a process owns the live
 // user continuation. ENTERING closes recursive reuse before SAVE completes.

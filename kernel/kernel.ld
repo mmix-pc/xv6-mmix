@@ -77,10 +77,8 @@ SECTIONS
          "kernel read-only data end is not page-aligned")
   ASSERT(kernel_rodata_end <= kernel_end,
          "kernel writable data precedes read-only data end")
-  ASSERT(mmix_trap_active >= kernel_rodata_end &&
-             mmix_trap_active + 8 <= kernel_end &&
-             mmix_trap_rk_shadow >= kernel_rodata_end &&
-             mmix_trap_rk_shadow + 8 <= kernel_end &&
+  ASSERT(cpus >= kernel_rodata_end &&
+             cpus < kernel_end &&
              mmix_trap_vector >= kernel_rodata_end &&
              mmix_trap_vector + 8 <= kernel_end &&
              mmix_user_trapframe >= kernel_rodata_end &&
