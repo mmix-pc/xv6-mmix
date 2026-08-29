@@ -1056,6 +1056,10 @@ kernel_pagetable_audit(pagetable_t pagetable)
       require_identity(pagetable,
                        (uint64)&mmix_boot_handoffs[MMIX_MAX_CPUS - 1],
                        PTE_R | PTE_W) < 0 ||
+      require_identity(pagetable, (uint64)&mmix_startup, PTE_R | PTE_W) < 0 ||
+      require_identity(
+        pagetable, (uint64)&mmix_startup.cpu_stage[MMIX_MAX_CPUS - 1],
+        PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, (uint64)&kernel_pagetable, PTE_R | PTE_W) <
         0 ||
       require_identity(pagetable, first_free, PTE_R | PTE_W) < 0 ||
@@ -1206,15 +1210,15 @@ kvminit(void)
 void
 kvminithart(void)
 {
+  uint64 cpu_id = cpuid();
+
   if (mmix_rv_read() == kernel_pagetable->rv || mmix_intr_get())
     panic("paging state");
   mmix_rv_publish(kernel_pagetable->rv);
   if (mmix_rv_read() != kernel_pagetable->rv || mmix_intr_get() ||
-      mmix_ro_read() < REGISTER_STACK_BASE ||
-      mmix_ro_read() >= REGISTER_STACK_LIMIT ||
-      mmix_rs_read() < REGISTER_STACK_BASE ||
-      mmix_rs_read() >= REGISTER_STACK_LIMIT)
+      mmix_ro_read() < BOOT_REGISTER_STACK_BASE(cpu_id) ||
+      mmix_ro_read() >= BOOT_REGISTER_STACK_LIMIT(cpu_id) ||
+      mmix_rs_read() < BOOT_REGISTER_STACK_BASE(cpu_id) ||
+      mmix_rs_read() >= BOOT_REGISTER_STACK_LIMIT(cpu_id))
     panic("paging enable");
-
-  diagnostic_paging(kernel_pagetable->rv);
 }

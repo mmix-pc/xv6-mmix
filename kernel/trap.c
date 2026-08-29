@@ -451,22 +451,11 @@ void
 trapinit(void)
 {
   uint64 entry = (uint64)mmix_kernel_trap_entry;
-  uint64 ro = mmix_ro_read();
-  uint64 rs = mmix_rs_read();
-  uint64 sp = mmix_sp_read();
 
   mmix_intr_mask_write(0);
   mmix_trap_active = 0;
   ticks = 0;
   initlock(&tickslock, "time");
-  mmix_ra_write(mmix_ra_disable_trips(mmix_ra_read()));
-
-  if (ro < REGISTER_STACK_BASE || ro >= REGISTER_STACK_LIMIT ||
-      rs < REGISTER_STACK_BASE || rs >= REGISTER_STACK_LIMIT)
-    panic("trap register stack");
-  if (sp <= BOOT_STACK_BASE(BOOT_CPU_ID) + MMIX_TRAP_STACK_RESERVE ||
-      sp > BOOT_STACK_TOP(BOOT_CPU_ID))
-    panic("trap software stack");
   if (mmix_trap_vector_make(entry, (uint64)kernel_text_end, &mmix_trap_vector) <
       0)
     panic("trap vector");
@@ -479,12 +468,25 @@ trapinit(void)
 void
 trapinithart(void)
 {
+  uint64 cpu_id = cpuid();
   uint64 requests;
+  uint64 ro = mmix_ro_read();
+  uint64 rs = mmix_rs_read();
+  uint64 sp = mmix_sp_read();
 
-  mmix_intr_mask_write(0);
+  mmix_rk_write(0);
   if (mmix_trap_vector == 0 || mmix_trap_active != 0)
     panic("trap state");
+  if (ro < BOOT_REGISTER_STACK_BASE(cpu_id) ||
+      ro >= BOOT_REGISTER_STACK_LIMIT(cpu_id) ||
+      rs < BOOT_REGISTER_STACK_BASE(cpu_id) ||
+      rs >= BOOT_REGISTER_STACK_LIMIT(cpu_id))
+    panic("trap register stack");
+  if (sp <= BOOT_STACK_BASE(cpu_id) + MMIX_TRAP_STACK_RESERVE ||
+      sp > BOOT_STACK_TOP(cpu_id))
+    panic("trap software stack");
 
+  mmix_ra_write(mmix_ra_disable_trips(mmix_ra_read()));
   mmix_rt_write(mmix_trap_vector);
   mmix_rtt_write(mmix_trap_vector);
   if (mmix_rt_read() != mmix_trap_vector ||
@@ -493,6 +495,14 @@ trapinithart(void)
 
   requests = mmix_rq_read();
   mmix_rq_write(requests & ~MMIX_RQ_PROGRAM_MASK);
+}
+
+void
+trapenablehart(void)
+{
+  if (mmix_rt_read() != mmix_trap_vector ||
+      mmix_rtt_read() != mmix_trap_vector || mmix_rk_read() != 0)
+    panic("trap enable");
   mmix_intr_mask_write(MMIX_KERNEL_PROGRAM_MASK);
 }
 

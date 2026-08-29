@@ -145,6 +145,7 @@ void            syscall();
 extern uint     ticks;
 void            trapinit(void);
 void            trapinithart(void);
+void            trapenablehart(void);
 extern struct spinlock tickslock;
 void            usertrap(void);
 void            usertrapret(void);

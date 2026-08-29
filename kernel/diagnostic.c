@@ -146,6 +146,19 @@ diagnostic_paging(uint64 rv)
 }
 
 void
+diagnostic_startup(uint64 cpu_count, uint64 online)
+{
+  for (uint64 cpu_id = 0; cpu_id < cpu_count; cpu_id++) {
+    diagnostic_puts("cpu ");
+    diagnostic_put_u64(cpu_id);
+    diagnostic_puts(": entered, online\n");
+  }
+  diagnostic_puts("startup online: ");
+  diagnostic_put_hex64(online);
+  early_uart_putc('\n');
+}
+
+void
 diagnostic_trap(const struct mmix_trap_diagnostic *diagnostic)
 {
   diagnostic_puts(diagnostic->from_user ? "user trap: class=" :

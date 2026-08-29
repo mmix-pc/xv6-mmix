@@ -62,6 +62,21 @@ startup_publish_arrival(uint64 cpu_id)
 }
 
 static int
+startup_publish_online(uint64 cpu_id)
+{
+  uint64 old;
+
+  startup_set_stage(cpu_id, MMIX_CPU_STAGE_ONLINE);
+  old = __atomic_fetch_or(&mmix_startup.online, 1ULL << cpu_id,
+                          __ATOMIC_RELEASE);
+  if (old & (1ULL << cpu_id)) {
+    startup_fail(MMIX_STARTUP_FAILURE_DUPLICATE_ONLINE);
+    return -1;
+  }
+  return 0;
+}
+
+static int
 startup_begin_collection(void)
 {
   uint64 expected = MMIX_STARTUP_RESET;
@@ -183,7 +198,22 @@ secondary_wait_for_global(uint64 cpu_id, uint64 bootinfo_pa)
         startup_terminal();
       }
       startup_set_stage(cpu_id, MMIX_CPU_STAGE_GLOBAL_ACQUIRED);
-      startup_terminal();
+      kvminithart();
+      trapinithart();
+      if (cpuid() != (int)cpu_id || mycpu() != &cpus[cpu_id] ||
+          mycpu()->proc != 0 || mycpu()->context.state != 0 ||
+          mycpu()->noff != 0 || mycpu()->intena != 0 ||
+          mmix_rv_read() != kernel_pagetable->rv || mmix_rk_read() != 0 ||
+          intr_get()) {
+        startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+        startup_terminal();
+      }
+      startup_set_stage(cpu_id, MMIX_CPU_STAGE_LOCAL_READY);
+      if (startup_publish_online(cpu_id) < 0)
+        startup_terminal();
+      startup_set_stage(cpu_id, MMIX_CPU_STAGE_SECONDARY_IDLE);
+      for (;;)
+        cpu_idle();
     }
     if (state != MMIX_STARTUP_RESET &&
         state != MMIX_STARTUP_COLLECTING &&
@@ -192,6 +222,77 @@ secondary_wait_for_global(uint64 cpu_id, uint64 bootinfo_pa)
       startup_terminal();
     }
     asm volatile("SWYM 0, 0, 0" ::: "memory");
+  }
+}
+
+int
+boot_wait_for_online(void)
+{
+  uint64 cpu_count = mmix_boot.info.cpu_count;
+  uint64 expected_mask = startup_expected_mask(cpu_count);
+
+  if (__atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+        MMIX_STARTUP_GLOBAL_READY ||
+      __atomic_load_n(&mmix_startup.generation, __ATOMIC_RELAXED) !=
+        MMIX_STARTUP_GENERATION ||
+      __atomic_load_n(&mmix_startup.arrived, __ATOMIC_RELAXED) !=
+        expected_mask ||
+      __atomic_load_n(&mmix_startup.global_owner, __ATOMIC_RELAXED) !=
+        BOOT_CPU_ID + 1 ||
+      __atomic_load_n(&mmix_startup.global_initializer_count,
+                      __ATOMIC_RELAXED) != 1 ||
+      __atomic_load_n(&mmix_startup.failure, __ATOMIC_RELAXED) !=
+        MMIX_STARTUP_FAILURE_NONE ||
+      __atomic_load_n(&mmix_startup.ready_cookie, __ATOMIC_RELAXED) !=
+        MMIX_STARTUP_READY_COOKIE ||
+      cpuid() != BOOT_CPU_ID || mycpu() != &cpus[BOOT_CPU_ID] ||
+      mycpu()->proc != 0 || mycpu()->context.state != 0 ||
+      mycpu()->noff != 0 || mycpu()->intena != 0 ||
+      mmix_rv_read() != kernel_pagetable->rv ||
+      mmix_rk_read() != MMIX_KERNEL_PROGRAM_MASK || intr_get()) {
+    startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+    return -1;
+  }
+
+  startup_set_stage(BOOT_CPU_ID, MMIX_CPU_STAGE_LOCAL_READY);
+  if (startup_publish_online(BOOT_CPU_ID) < 0)
+    return -1;
+
+  for (;;) {
+    uint64 online = __atomic_load_n(&mmix_startup.online, __ATOMIC_ACQUIRE);
+    int idle = 1;
+
+    if (__atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) ==
+        MMIX_STARTUP_FAILED)
+      return -1;
+    if ((online & ~expected_mask) != 0) {
+      startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+      return -1;
+    }
+    if (online != expected_mask) {
+      asm volatile("SWYM 0, 0, 0" ::: "memory");
+      continue;
+    }
+    for (uint64 cpu_id = 1; cpu_id < cpu_count; cpu_id++) {
+      uint64 stage = __atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
+                                     __ATOMIC_ACQUIRE);
+
+      if (stage == MMIX_CPU_STAGE_ONLINE) {
+        idle = 0;
+        continue;
+      }
+      if (stage != MMIX_CPU_STAGE_SECONDARY_IDLE) {
+        startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+        return -1;
+      }
+    }
+    if (!idle) {
+      asm volatile("SWYM 0, 0, 0" ::: "memory");
+      continue;
+    }
+    diagnostic_startup(cpu_count, online);
+    startup_set_stage(BOOT_CPU_ID, MMIX_CPU_STAGE_SERVICE);
+    return 0;
   }
 }
 

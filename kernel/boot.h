@@ -39,6 +39,10 @@ enum mmix_cpu_startup_stage {
   MMIX_CPU_STAGE_WAIT_GLOBAL = 3,
   MMIX_CPU_STAGE_GLOBAL_INIT = 4,
   MMIX_CPU_STAGE_GLOBAL_ACQUIRED = 5,
+  MMIX_CPU_STAGE_LOCAL_READY = 6,
+  MMIX_CPU_STAGE_ONLINE = 7,
+  MMIX_CPU_STAGE_SERVICE = 8,
+  MMIX_CPU_STAGE_SECONDARY_IDLE = 9,
 };
 
 enum mmix_startup_failure {
@@ -49,6 +53,7 @@ enum mmix_startup_failure {
   MMIX_STARTUP_FAILURE_GENERATION = 4,
   MMIX_STARTUP_FAILURE_DUPLICATE_INITIALIZER = 5,
   MMIX_STARTUP_FAILURE_PREMATURE_PUBLICATION = 6,
+  MMIX_STARTUP_FAILURE_DUPLICATE_ONLINE = 7,
 };
 
 #define MMIX_STARTUP_GENERATION 1
@@ -59,6 +64,7 @@ struct mmix_startup_control {
   uint64 generation;
   uint64 state;
   uint64 arrived;
+  uint64 online;
   // Zero means unclaimed; a claimed owner is encoded as CPU ID plus one.
   uint64 global_owner;
   uint64 global_initializer_count;
@@ -81,13 +87,14 @@ boot_physical_memory(void)
 void start(uint64 startup_cpu_id, uint64 bootinfo_pa)
     __attribute__((noreturn));
 int boot_publish_global_ready(void);
+int boot_wait_for_online(void);
 
 _Static_assert(sizeof(struct mmix_boot_handoff) == 6 * sizeof(uint64),
                "unexpected MMIX boot handoff size");
 _Static_assert(__alignof__(struct mmix_startup_control) == sizeof(uint64),
                "startup control must be octa-aligned");
 _Static_assert(sizeof(struct mmix_startup_control) ==
-                 (7 + MMIX_MAX_CPUS) * sizeof(uint64),
+                 (8 + MMIX_MAX_CPUS) * sizeof(uint64),
                "unexpected startup control size");
 
 #endif
