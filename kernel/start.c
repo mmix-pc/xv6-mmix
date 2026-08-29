@@ -4,6 +4,7 @@
 #include "defs.h"
 #include "diagnostic.h"
 #include "early_uart.h"
+#include "kcontext.h"
 #include "vm.h"
 
 void main(void) __attribute__((noreturn));
@@ -73,6 +74,21 @@ startup_publish_online(uint64 cpu_id)
     startup_fail(MMIX_STARTUP_FAILURE_DUPLICATE_ONLINE);
     return -1;
   }
+  return 0;
+}
+
+static int
+startup_publish_context_transfer(uint64 cpu_id)
+{
+  uint64 expected = 0;
+
+  if (!__atomic_compare_exchange_n(&mmix_startup.context_transfers[cpu_id],
+                                   &expected, 1, 0, __ATOMIC_RELEASE,
+                                   __ATOMIC_RELAXED)) {
+    startup_fail(MMIX_STARTUP_FAILURE_DUPLICATE_CONTEXT);
+    return -1;
+  }
+  startup_set_stage(cpu_id, MMIX_CPU_STAGE_CONTEXT_READY);
   return 0;
 }
 
@@ -168,6 +184,7 @@ startup_claim_global_initialization(void)
   return 0;
 }
 
+static void boot_secondary_context_ready(void);
 static void secondary_wait_for_global(uint64 cpu_id, uint64 bootinfo_pa)
   __attribute__((noreturn));
 
@@ -209,11 +226,7 @@ secondary_wait_for_global(uint64 cpu_id, uint64 bootinfo_pa)
         startup_terminal();
       }
       startup_set_stage(cpu_id, MMIX_CPU_STAGE_LOCAL_READY);
-      if (startup_publish_online(cpu_id) < 0)
-        startup_terminal();
-      startup_set_stage(cpu_id, MMIX_CPU_STAGE_SECONDARY_IDLE);
-      for (;;)
-        cpu_idle();
+      cpu_secondary_enter(boot_secondary_context_ready);
     }
     if (state != MMIX_STARTUP_RESET &&
         state != MMIX_STARTUP_COLLECTING &&
@@ -223,6 +236,36 @@ secondary_wait_for_global(uint64 cpu_id, uint64 bootinfo_pa)
     }
     asm volatile("SWYM 0, 0, 0" ::: "memory");
   }
+}
+
+static void
+boot_secondary_context_ready(void)
+{
+  uint64 cpu_id = cpuid();
+  struct cpu *c = mycpu();
+  uint64 stage;
+
+  if (cpu_id == BOOT_CPU_ID || cpu_id >= mmix_boot.info.cpu_count)
+    goto fail;
+  stage = __atomic_load_n(&mmix_startup.cpu_stage[cpu_id], __ATOMIC_ACQUIRE);
+  if (stage != MMIX_CPU_STAGE_LOCAL_READY || c != &cpus[cpu_id] ||
+      c->proc != 0 || c->noff != 0 || c->intena != 0 ||
+      c->trap.active != 0 || c->trap.rk_shadow != 0 ||
+      !kcontext_current_valid(&c->context,
+                              MMIX_CONTEXT_SCHEDULER_SLOT(cpu_id)) ||
+      mmix_rv_read() != kernel_pagetable->rv || mmix_rk_read() != 0 ||
+      intr_get() || mmix_rt_read() == 0 ||
+      mmix_rt_read() != mmix_rtt_read())
+    goto fail;
+  if (startup_publish_context_transfer(cpu_id) < 0 ||
+      startup_publish_online(cpu_id) < 0)
+    startup_terminal();
+  startup_set_stage(cpu_id, MMIX_CPU_STAGE_SECONDARY_IDLE);
+  return;
+
+fail:
+  startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+  startup_terminal();
 }
 
 int
@@ -245,6 +288,8 @@ boot_wait_for_online(void)
         MMIX_STARTUP_FAILURE_NONE ||
       __atomic_load_n(&mmix_startup.ready_cookie, __ATOMIC_RELAXED) !=
         MMIX_STARTUP_READY_COOKIE ||
+      __atomic_load_n(&mmix_startup.context_transfers[BOOT_CPU_ID],
+                      __ATOMIC_RELAXED) != 0 ||
       cpuid() != BOOT_CPU_ID || mycpu() != &cpus[BOOT_CPU_ID] ||
       mycpu()->proc != 0 || mycpu()->context.state != 0 ||
       mycpu()->noff != 0 || mycpu()->intena != 0 ||
@@ -276,12 +321,27 @@ boot_wait_for_online(void)
     for (uint64 cpu_id = 1; cpu_id < cpu_count; cpu_id++) {
       uint64 stage = __atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
                                      __ATOMIC_ACQUIRE);
+      uint64 transfers =
+        __atomic_load_n(&mmix_startup.context_transfers[cpu_id],
+                        __ATOMIC_ACQUIRE);
 
-      if (stage == MMIX_CPU_STAGE_ONLINE) {
+      if (transfers != 1) {
+        startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+        return -1;
+      }
+      if (stage == MMIX_CPU_STAGE_CONTEXT_READY ||
+          stage == MMIX_CPU_STAGE_ONLINE) {
         idle = 0;
         continue;
       }
       if (stage != MMIX_CPU_STAGE_SECONDARY_IDLE) {
+        startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+        return -1;
+      }
+    }
+    for (uint64 cpu_id = cpu_count; cpu_id < MMIX_MAX_CPUS; cpu_id++) {
+      if (__atomic_load_n(&mmix_startup.context_transfers[cpu_id],
+                          __ATOMIC_RELAXED) != 0) {
         startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
         return -1;
       }

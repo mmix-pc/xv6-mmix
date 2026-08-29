@@ -131,14 +131,15 @@ kcontext_init(void)
     panic("context pages");
 }
 
-void
-kcontext_prepare(struct context *context, uint slot, void (*entry)(void))
+static void
+kcontext_prepare_internal(struct context *context, uint slot, uint64 entry,
+                          uint64 arg)
 {
   struct mmix_initial_context *initial;
   uint64 register_base;
   uint64 software_top;
 
-  if (context == 0 || entry == 0 || ((uint64)entry & 3) != 0 ||
+  if (context == 0 || entry == 0 || (entry & 3) != 0 ||
       slot >= MMIX_CONTEXT_SLOT_COUNT)
     panic("context prepare");
 
@@ -151,9 +152,56 @@ kcontext_prepare(struct context *context, uint slot, void (*entry)(void))
 
   initial = (struct mmix_initial_context *)register_base;
   memset(initial, 0, sizeof(*initial));
+  // r231 carries the first argument into a newly prepared C context.
+  initial->globals[0] = arg;
   initial->globals[MMIX_ABI_FP - MMIX_ABI_GLOBAL_FIRST] = software_top;
   initial->globals[MMIX_ABI_SP - MMIX_ABI_GLOBAL_FIRST] = software_top;
-  initial->rj = (uint64)entry;
+  initial->rj = entry;
   initial->rg_ra = (uint64)MMIX_ABI_GLOBAL_FIRST << 56;
   context->state = register_base + MMIX_CONTEXT_INITIAL_STATE_OFFSET;
+}
+
+void
+kcontext_prepare(struct context *context, uint slot, void (*entry)(void))
+{
+  kcontext_prepare_internal(context, slot, (uint64)entry, 0);
+}
+
+void
+kcontext_prepare_arg(struct context *context, uint slot,
+                     void (*entry)(uint64), uint64 arg)
+{
+  kcontext_prepare_internal(context, slot, (uint64)entry, arg);
+}
+
+int
+kcontext_current_valid(const struct context *context, uint slot)
+{
+  uint64 low;
+  uint64 software;
+  uint64 middle;
+  uint64 registers;
+  uint64 high;
+  uint64 ro;
+  uint64 rs;
+  uint64 sp;
+
+  if (context == 0 || slot >= MMIX_CONTEXT_SLOT_COUNT)
+    return 0;
+  low = MMIX_CONTEXT_LOW_GUARD(slot);
+  software = MMIX_CONTEXT_SOFTWARE_STACK_BASE(slot);
+  middle = MMIX_CONTEXT_MIDDLE_GUARD(slot);
+  registers = MMIX_CONTEXT_REGISTER_STACK_BASE(slot);
+  high = MMIX_CONTEXT_HIGH_GUARD(slot);
+  ro = mmix_ro_read();
+  rs = mmix_rs_read();
+  sp = mmix_sp_read();
+
+  return context->state >= registers && context->state < high &&
+         sp > software && sp <= middle && ro >= registers && ro < high &&
+         rs >= registers && rs < high &&
+         context_mapping_matches(software, context_software_pa[slot]) &&
+         context_mapping_matches(registers, context_register_pa[slot]) &&
+         context_unmapped(low) && context_unmapped(middle) &&
+         context_unmapped(high);
 }

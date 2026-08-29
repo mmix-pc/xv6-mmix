@@ -1,5 +1,10 @@
 #include "mmix.h"
 #include "cpu.h"
+#include "defs.h"
+#include "kcontext.h"
+#include "memlayout.h"
+
+static void cpu_secondary_idle(uint64) __attribute__((noreturn));
 
 void
 mmix_intr_mask_write(uint64 mask)
@@ -41,4 +46,31 @@ void
 cpu_idle(void)
 {
   asm volatile("SWYM 0, 0, 0");
+}
+
+void
+cpu_secondary_enter(void (*ready)(void))
+{
+  struct context bootstrap_context;
+  struct cpu *c = mycpu();
+  int id = cpuid();
+
+  intr_off();
+  if (ready == 0 || id == BOOT_CPU_ID || c->proc != 0 ||
+      c->context.state != 0 || c->noff != 0 || c->intena != 0 || intr_get())
+    panic("secondary context");
+  kcontext_prepare_arg(&c->context, MMIX_CONTEXT_SCHEDULER_SLOT(id),
+                       cpu_secondary_idle, (uint64)ready);
+  swtch(&bootstrap_context, &c->context);
+  panic("secondary context returned");
+}
+
+static void
+cpu_secondary_idle(uint64 ready_address)
+{
+  void (*ready)(void) = (void (*)(void))ready_address;
+
+  ready();
+  for (;;)
+    cpu_idle();
 }

@@ -40,9 +40,10 @@ enum mmix_cpu_startup_stage {
   MMIX_CPU_STAGE_GLOBAL_INIT = 4,
   MMIX_CPU_STAGE_GLOBAL_ACQUIRED = 5,
   MMIX_CPU_STAGE_LOCAL_READY = 6,
-  MMIX_CPU_STAGE_ONLINE = 7,
-  MMIX_CPU_STAGE_SERVICE = 8,
-  MMIX_CPU_STAGE_SECONDARY_IDLE = 9,
+  MMIX_CPU_STAGE_CONTEXT_READY = 7,
+  MMIX_CPU_STAGE_ONLINE = 8,
+  MMIX_CPU_STAGE_SERVICE = 9,
+  MMIX_CPU_STAGE_SECONDARY_IDLE = 10,
 };
 
 enum mmix_startup_failure {
@@ -54,6 +55,7 @@ enum mmix_startup_failure {
   MMIX_STARTUP_FAILURE_DUPLICATE_INITIALIZER = 5,
   MMIX_STARTUP_FAILURE_PREMATURE_PUBLICATION = 6,
   MMIX_STARTUP_FAILURE_DUPLICATE_ONLINE = 7,
+  MMIX_STARTUP_FAILURE_DUPLICATE_CONTEXT = 8,
 };
 
 #define MMIX_STARTUP_GENERATION 1
@@ -71,6 +73,7 @@ struct mmix_startup_control {
   uint64 failure;
   uint64 ready_cookie;
   uint64 cpu_stage[MMIX_MAX_CPUS];
+  uint64 context_transfers[MMIX_MAX_CPUS];
 };
 
 extern struct mmix_boot_state mmix_boot;
@@ -94,7 +97,7 @@ _Static_assert(sizeof(struct mmix_boot_handoff) == 6 * sizeof(uint64),
 _Static_assert(__alignof__(struct mmix_startup_control) == sizeof(uint64),
                "startup control must be octa-aligned");
 _Static_assert(sizeof(struct mmix_startup_control) ==
-                 (8 + MMIX_MAX_CPUS) * sizeof(uint64),
+                 (8 + 2 * MMIX_MAX_CPUS) * sizeof(uint64),
                "unexpected startup control size");
 
 #endif

@@ -65,6 +65,7 @@ int intr_get(void);
 void intr_off(void);
 void intr_on(void);
 void cpu_idle(void);
+void cpu_secondary_enter(void (*)(void)) __attribute__((noreturn));
 
 #endif // !__ASSEMBLER__
 
