@@ -15,9 +15,8 @@ extern char mmix_kernel_trap_entry[];
 extern void mmix_user_resume(void);
 
 uint64 mmix_trap_vector;
-// User execution is CPU-0-owned until secondary scheduling is enabled. Kernel
-// trap entry uses rV, not this scratch pointer, to classify concurrent traps.
-volatile uint64 mmix_user_trapframe;
+// User execution remains CPU-0-owned until secondary scheduling is enabled.
+// Kernel trap entry uses rV, not CPU-local user scratch, to classify traps.
 uint ticks;
 struct spinlock tickslock;
 
@@ -460,7 +459,7 @@ usertrap(void)
 
   mmix_intr_mask_write(0);
   if (p == 0 || p->state != RUNNING || holding(&p->lock) ||
-      cpuid() != BOOT_CPU_ID || mmix_user_trapframe != 0 ||
+      cpuid() != BOOT_CPU_ID || c->trap.user_trapframe != 0 ||
       c->trap.active != 0)
     panic("user trap owner");
   trapframe = p->trapframe;
@@ -559,6 +558,7 @@ trapinithart(void)
   c->trap.rk_shadow = 0;
   c->trap.interrupt_entries = 0;
   c->trap.interrupt_returns = 0;
+  c->trap.user_trapframe = 0;
   if (mmix_trap_vector == 0)
     panic("trap state");
   if (ro < BOOT_REGISTER_STACK_BASE(cpu_id) ||
@@ -607,7 +607,7 @@ usertrapret(void)
   c = mycpu();
   p = c->proc;
   if (cpuid() != BOOT_CPU_ID || p == 0 || p->state != RUNNING ||
-      holding(&p->lock) || c->noff != 0 || mmix_user_trapframe != 0 ||
+      holding(&p->lock) || c->noff != 0 || c->trap.user_trapframe != 0 ||
       c->trap.active != 0)
     panic("user return owner");
   if (killed(p))
@@ -642,13 +642,13 @@ usertrapret(void)
   trapframe->user_ru = mmix_ru_bind_cpu(trapframe->user_ru, cpuid());
   trapframe->flags = MMIX_PROC_TRAPFRAME_ACTIVE;
   asm volatile("" : : : "memory");
-  mmix_user_trapframe = alias;
+  c->trap.user_trapframe = alias;
   asm volatile("" : : : "memory");
   mmix_user_resume();
   asm volatile("" : : : "memory");
 
   if (c->proc != p || p->trapframe != trapframe ||
-      mmix_user_trapframe != 0 || c->trap.active != 0 ||
+      c->trap.user_trapframe != 0 || c->trap.active != 0 ||
       trapframe->kernel_state != 0 ||
       trapframe->flags != MMIX_PROC_TRAPFRAME_READY ||
       trapframe->reserved != 0 ||

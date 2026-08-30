@@ -10,7 +10,8 @@
 #define MMIX_CPU_TRAP_RK_SHADOW_OFFSET 32
 #define MMIX_CPU_INTERRUPT_ENTRIES_OFFSET 40
 #define MMIX_CPU_INTERRUPT_RETURNS_OFFSET 48
-#define MMIX_CPU_SIZE                     56
+#define MMIX_CPU_USER_TRAPFRAME_OFFSET    56
+#define MMIX_CPU_SIZE                     64
 
 #if !defined(__ASSEMBLER__)
 
@@ -31,6 +32,7 @@ struct cpu_trap_state {
   uint64 rk_shadow;
   uint64 interrupt_entries;
   uint64 interrupt_returns;
+  volatile uint64 user_trapframe;
 };
 
 // Per-CPU scheduler state.
@@ -62,6 +64,9 @@ _Static_assert(__builtin_offsetof(struct cpu, trap.interrupt_entries) ==
 _Static_assert(__builtin_offsetof(struct cpu, trap.interrupt_returns) ==
                  MMIX_CPU_INTERRUPT_RETURNS_OFFSET,
                "MMIX CPU interrupt-return offset mismatch");
+_Static_assert(__builtin_offsetof(struct cpu, trap.user_trapframe) ==
+                 MMIX_CPU_USER_TRAPFRAME_OFFSET,
+               "MMIX CPU user-trapframe offset mismatch");
 _Static_assert(sizeof(struct cpu) == MMIX_CPU_SIZE,
                "MMIX CPU size mismatch");
 

@@ -80,9 +80,7 @@ SECTIONS
   ASSERT(cpus >= kernel_rodata_end &&
              cpus < kernel_end &&
              mmix_trap_vector >= kernel_rodata_end &&
-             mmix_trap_vector + 8 <= kernel_end &&
-             mmix_user_trapframe >= kernel_rodata_end &&
-             mmix_user_trapframe + 8 <= kernel_end,
+             mmix_trap_vector + 8 <= kernel_end,
          "MMIX trap state is outside kernel writable storage")
   ASSERT(kernel_end <= kernel_boot_stacks_start,
          "kernel overlaps the bootstrap stacks")
