@@ -4,6 +4,7 @@
 #include "mmix.h"
 #include "defs.h"
 #include "boot.h"
+#include "cpu.h"
 #include "diagnostic.h"
 #include "intc.h"
 #include "ipi.h"
@@ -60,6 +61,13 @@ main(void)
       intc_set_enabled(timer_irq_number, 1) != MMIX_INTC_OK)
     panic("timer irq enable");
   uartenable();
+  intr_on();
+  while (timer_ticks() == 0)
+    cpu_idle();
+  if (boot_publish_interrupt_ready() < 0 ||
+      boot_wait_for_interrupt_ready() < 0)
+    panic("interrupt ready");
+  intr_off();
   userinit();         // first user process
 
   scheduler();

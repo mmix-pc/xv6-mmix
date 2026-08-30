@@ -145,8 +145,8 @@ timer_disable(void)
   return MMIX_TIMER_OK;
 }
 
-// An expired timer is level-triggered. Rearm it or disable it, acknowledge
-// pending status, and only then complete its interrupt-controller claim.
+// An expired timer is level-triggered. Disable it before acknowledging stale
+// status, then rearm it before completing its interrupt-controller claim.
 int
 timer_acknowledge(void)
 {

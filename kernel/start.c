@@ -96,6 +96,21 @@ startup_publish_context_transfer(uint64 cpu_id)
 }
 
 static int
+startup_publish_interrupt_ready(uint64 cpu_id)
+{
+  uint64 old;
+
+  startup_set_stage(cpu_id, MMIX_CPU_STAGE_INTERRUPT_READY);
+  old = __atomic_fetch_or(&mmix_startup.interrupt_ready, 1ULL << cpu_id,
+                          __ATOMIC_RELEASE);
+  if (old & (1ULL << cpu_id)) {
+    startup_fail(MMIX_STARTUP_FAILURE_DUPLICATE_INTERRUPT_READY);
+    return -1;
+  }
+  return 0;
+}
+
+static int
 startup_begin_collection(void)
 {
   uint64 expected = MMIX_STARTUP_RESET;
@@ -257,6 +272,7 @@ boot_secondary_context_ready(void)
   int ipi_is_pending;
   uint64 ipi_received;
   uint64 ipi_acknowledged_generation;
+  uint32 timer_irq_number;
 
   if (cpu_id == BOOT_CPU_ID || cpu_id >= mmix_boot.info.cpu_count)
     goto fail;
@@ -279,6 +295,18 @@ boot_secondary_context_ready(void)
     goto fail;
   if (startup_publish_context_transfer(cpu_id) < 0 ||
       startup_publish_online(cpu_id) < 0)
+    startup_terminal();
+
+  if (timer_irq(&timer_irq_number) != MMIX_TIMER_OK ||
+      timer_arm_next() != MMIX_TIMER_OK ||
+      intc_set_enabled(timer_irq_number, 1) != MMIX_INTC_OK ||
+      intc_enabled(&enabled) != MMIX_INTC_OK ||
+      enabled != (1U << timer_irq_number))
+    goto fail;
+  intr_on();
+  while (timer_ticks() == 0)
+    cpu_idle();
+  if (boot_publish_interrupt_ready() < 0)
     startup_terminal();
   startup_set_stage(cpu_id, MMIX_CPU_STAGE_SECONDARY_IDLE);
   return;
@@ -325,7 +353,6 @@ boot_wait_for_online(void)
 
   for (;;) {
     uint64 online = __atomic_load_n(&mmix_startup.online, __ATOMIC_ACQUIRE);
-    int idle = 1;
 
     if (__atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) ==
         MMIX_STARTUP_FAILED)
@@ -349,15 +376,12 @@ boot_wait_for_online(void)
         startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
         return -1;
       }
-      if (stage == MMIX_CPU_STAGE_CONTEXT_READY ||
-          stage == MMIX_CPU_STAGE_ONLINE) {
-        idle = 0;
+      if (stage == MMIX_CPU_STAGE_ONLINE ||
+          stage == MMIX_CPU_STAGE_INTERRUPT_READY ||
+          stage == MMIX_CPU_STAGE_SECONDARY_IDLE)
         continue;
-      }
-      if (stage != MMIX_CPU_STAGE_SECONDARY_IDLE) {
-        startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
-        return -1;
-      }
+      startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+      return -1;
     }
     for (uint64 cpu_id = cpu_count; cpu_id < MMIX_MAX_CPUS; cpu_id++) {
       if (__atomic_load_n(&mmix_startup.context_transfers[cpu_id],
@@ -366,14 +390,105 @@ boot_wait_for_online(void)
         return -1;
       }
     }
-    if (!idle) {
-      asm volatile("SWYM 0, 0, 0" ::: "memory");
+    diagnostic_startup(cpu_count, online);
+    return 0;
+  }
+}
+
+int
+boot_publish_interrupt_ready(void)
+{
+  uint64 cpu_id = cpuid();
+  uint64 stage;
+  uint64 entries;
+  uint64 returns;
+  uint32 enabled;
+  uint32 timer_irq_number;
+  struct cpu *c = mycpu();
+
+  if (cpu_id >= mmix_boot.info.cpu_count || c != &cpus[cpu_id] ||
+      timer_irq(&timer_irq_number) != MMIX_TIMER_OK ||
+      intc_enabled(&enabled) != MMIX_INTC_OK || !intr_get())
+    goto fail;
+  push_off();
+  stage = __atomic_load_n(&mmix_startup.cpu_stage[cpu_id], __ATOMIC_ACQUIRE);
+  entries = __atomic_load_n(&c->trap.interrupt_entries, __ATOMIC_ACQUIRE);
+  returns = __atomic_load_n(&c->trap.interrupt_returns, __ATOMIC_ACQUIRE);
+  if (stage != MMIX_CPU_STAGE_ONLINE ||
+      (__atomic_load_n(&mmix_startup.online, __ATOMIC_ACQUIRE) &
+       (1ULL << cpu_id)) == 0 ||
+      (cpu_id != BOOT_CPU_ID &&
+       __atomic_load_n(&mmix_startup.context_transfers[cpu_id],
+                       __ATOMIC_ACQUIRE) != 1) ||
+      intr_get() || (mmix_rk_read() & MMIX_KERNEL_INTERRUPT_MASK) != 0 ||
+      c->trap.rk_shadow != mmix_rk_read() || c->trap.active != 0 ||
+      c->proc != 0 || c->noff != 1 || c->intena != 1 ||
+      timer_ticks() == 0 || entries == 0 || entries != returns ||
+      (enabled & (1U << timer_irq_number)) == 0 ||
+      (cpu_id != BOOT_CPU_ID && enabled != (1U << timer_irq_number)))
+    goto fail;
+
+  printk("interrupt-ready: cpu=%d timer=%llu noff=%d handlers=%llu/%llu\n",
+         (int)cpu_id, (unsigned long long)timer_ticks(), c->noff - 1,
+         (unsigned long long)entries, (unsigned long long)returns);
+  if (startup_publish_interrupt_ready(cpu_id) < 0)
+    return -1;
+  pop_off();
+  return 0;
+
+fail:
+  startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+  return -1;
+}
+
+int
+boot_wait_for_interrupt_ready(void)
+{
+  uint64 cpu_count = mmix_boot.info.cpu_count;
+  uint64 expected_mask = startup_expected_mask(cpu_count);
+
+  if (cpuid() != BOOT_CPU_ID ||
+      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+        MMIX_STARTUP_GLOBAL_READY)
+    goto fail;
+
+  for (;;) {
+    uint64 ready =
+      __atomic_load_n(&mmix_startup.interrupt_ready, __ATOMIC_ACQUIRE);
+    int all_idle = 1;
+
+    if (__atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) ==
+        MMIX_STARTUP_FAILED)
+      return -1;
+    if ((ready & ~expected_mask) != 0)
+      goto fail;
+    if (ready != expected_mask) {
+      cpu_idle();
       continue;
     }
-    diagnostic_startup(cpu_count, online);
+    for (uint64 cpu_id = 1; cpu_id < cpu_count; cpu_id++) {
+      uint64 stage = __atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
+                                     __ATOMIC_ACQUIRE);
+
+      if (stage == MMIX_CPU_STAGE_INTERRUPT_READY) {
+        all_idle = 0;
+        continue;
+      }
+      if (stage != MMIX_CPU_STAGE_SECONDARY_IDLE ||
+          cpus[cpu_id].proc != 0)
+        goto fail;
+    }
+    if (!all_idle) {
+      cpu_idle();
+      continue;
+    }
     startup_set_stage(BOOT_CPU_ID, MMIX_CPU_STAGE_SERVICE);
     return 0;
   }
+
+fail:
+  startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+  return -1;
 }
 
 int

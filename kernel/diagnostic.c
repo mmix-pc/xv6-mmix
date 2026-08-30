@@ -2,6 +2,7 @@
 #include "early_uart.h"
 #include "kalloc.h"
 #include "diagnostic.h"
+#include "printk.h"
 
 static void
 diagnostic_puts(const char *s)
@@ -148,14 +149,19 @@ diagnostic_paging(uint64 rv)
 void
 diagnostic_startup(uint64 cpu_count, uint64 online)
 {
-  for (uint64 cpu_id = 0; cpu_id < cpu_count; cpu_id++) {
-    diagnostic_puts("cpu ");
-    diagnostic_put_u64(cpu_id);
-    diagnostic_puts(": entered, online\n");
+  char mask[19];
+
+  mask[0] = '0';
+  mask[1] = 'x';
+  for (int digit = 0; digit < 16; digit++) {
+    int value = (online >> (60 - 4 * digit)) & 0xf;
+
+    mask[2 + digit] = value < 10 ? '0' + value : 'a' + value - 10;
   }
-  diagnostic_puts("startup online: ");
-  diagnostic_put_hex64(online);
-  early_uart_putc('\n');
+  mask[18] = 0;
+  for (uint64 cpu_id = 0; cpu_id < cpu_count; cpu_id++)
+    printk("cpu %d: entered, online\n", (int)cpu_id);
+  printk("startup online: %s\n", mask);
 }
 
 void

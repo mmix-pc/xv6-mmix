@@ -15,8 +15,8 @@ extern char mmix_kernel_trap_entry[];
 extern void mmix_user_resume(void);
 
 uint64 mmix_trap_vector;
-// P2.4 keeps user execution on CPU 0. Kernel trap entry uses rV, not this
-// CPU-0-owned scratch pointer, to classify concurrent secondary traps.
+// User execution is CPU-0-owned until secondary scheduling is enabled. Kernel
+// trap entry uses rV, not this scratch pointer, to classify concurrent traps.
 volatile uint64 mmix_user_trapframe;
 uint ticks;
 struct spinlock tickslock;
@@ -130,8 +130,8 @@ trap_preempt(struct mmix_trap_state *state, uint32 claim)
 }
 
 static const char *
-trap_interrupt_service(uint64 rq, uint64 restore_rk, uint64 rxx,
-                       uint64 *serviced, uint32 *claim, int *preempt)
+trap_interrupt_dispatch(uint64 rq, uint64 restore_rk, uint64 rxx,
+                        uint64 *serviced, uint32 *claim, int *preempt)
 {
   int pending;
   int status;
@@ -183,10 +183,12 @@ trap_interrupt_service(uint64 rq, uint64 restore_rk, uint64 rxx,
   if (timer_pending(&pending) != MMIX_TIMER_OK || !pending)
     return "timer not pending";
 
-  if (timer_arm_next() != MMIX_TIMER_OK)
-    return "timer rearm";
+  if (timer_disable() != MMIX_TIMER_OK)
+    return "timer disable";
   if (timer_acknowledge() != MMIX_TIMER_OK)
     return "timer acknowledge";
+  if (timer_arm_next() != MMIX_TIMER_OK)
+    return "timer rearm";
   if (intc_complete(*claim) != MMIX_INTC_OK)
     return "controller complete";
   if (timer_record_tick() != MMIX_TIMER_OK)
@@ -199,6 +201,32 @@ trap_interrupt_service(uint64 rq, uint64 restore_rk, uint64 rxx,
     *preempt = 1;
   }
 
+  return 0;
+}
+
+static const char *
+trap_interrupt_service(uint64 rq, uint64 restore_rk, uint64 rxx,
+                       uint64 *serviced, uint32 *claim, int *preempt)
+{
+  struct cpu *c = mycpu();
+  const char *error;
+  uint64 entries;
+  uint64 returns;
+
+  entries = __atomic_load_n(&c->trap.interrupt_entries, __ATOMIC_RELAXED);
+  if (entries == ~0ULL)
+    return "interrupt entry overflow";
+  __atomic_store_n(&c->trap.interrupt_entries, entries + 1,
+                   __ATOMIC_RELEASE);
+  error = trap_interrupt_dispatch(rq, restore_rk, rxx, serviced, claim,
+                                  preempt);
+  if (error != 0)
+    return error;
+  returns = __atomic_load_n(&c->trap.interrupt_returns, __ATOMIC_RELAXED);
+  if (returns == ~0ULL || returns + 1 != entries + 1)
+    return "interrupt return imbalance";
+  __atomic_store_n(&c->trap.interrupt_returns, returns + 1,
+                   __ATOMIC_RELEASE);
   return 0;
 }
 
@@ -529,6 +557,8 @@ trapinithart(void)
   mmix_rk_write(0);
   c->trap.active = 0;
   c->trap.rk_shadow = 0;
+  c->trap.interrupt_entries = 0;
+  c->trap.interrupt_returns = 0;
   if (mmix_trap_vector == 0)
     panic("trap state");
   if (ro < BOOT_REGISTER_STACK_BASE(cpu_id) ||
