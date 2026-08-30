@@ -180,9 +180,10 @@ proc_vm_claim_locked(struct proc *p, struct cpu *c)
   int id = cpuid();
 
   if (p == 0 || c == 0 || !holding(&p->lock) || p->state != RUNNABLE ||
-      p->pagetable == 0 || p->vm_owner_cpu != -1 || c != &cpus[id] ||
-      c->proc != 0)
+      p->vm_owner_cpu != -1 || c != &cpus[id] || c->proc != 0)
     panic("vm claim");
+  if (p->pagetable == 0)
+    return;
   (void)proc_vm_state(p);
   p->vm_owner_cpu = id;
 }
@@ -193,9 +194,16 @@ proc_vm_release_locked(struct proc *p, struct cpu *c)
   int id = cpuid();
 
   if (p == 0 || c == 0 || !holding(&p->lock) || p->state == RUNNING ||
-      p->vm_owner_cpu != id || c != &cpus[id] || c->proc != p ||
-      c->trap.user_trapframe != 0 || mmix_rv_read() != MMIX_KERNEL_RV)
+      c != &cpus[id] || c->proc != p || c->trap.user_trapframe != 0 ||
+      mmix_rv_read() != MMIX_KERNEL_RV)
     panic("vm release");
+  if (p->pagetable == 0) {
+    if (p->vm_owner_cpu != -1)
+      panic("vm kernel owner");
+    return;
+  }
+  if (p->vm_owner_cpu != id)
+    panic("vm release owner");
   p->vm_owner_cpu = -1;
 }
 
@@ -264,10 +272,11 @@ void
 proc_start(struct proc *p)
 {
   if (p == 0 || !holding(&p->lock) || p->state != USED ||
-      p->context.state == 0 || p->pagetable == 0 || p->vm_owner_cpu != -1)
+      p->context.state == 0 || p->vm_owner_cpu != -1)
     panic("proc start");
   // Publish all construction-time page-table work as one completed state.
-  proc_vm_advance_locked(p);
+  if (p->pagetable != 0)
+    proc_vm_advance_locked(p);
   p->state = RUNNABLE;
   release(&p->lock);
 }

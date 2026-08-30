@@ -15,7 +15,6 @@ extern char mmix_kernel_trap_entry[];
 extern void mmix_user_resume(void);
 
 uint64 mmix_trap_vector;
-// User execution remains CPU-0-owned until secondary scheduling is enabled.
 // Kernel trap entry uses rV, not CPU-local user scratch, to classify traps.
 uint ticks;
 struct spinlock tickslock;
@@ -197,8 +196,8 @@ trap_interrupt_dispatch(uint64 rq, uint64 restore_rk, uint64 rxx,
     ticks++;
     wakeup(&ticks);
     release(&tickslock);
-    *preempt = 1;
   }
+  *preempt = 1;
 
   return 0;
 }
@@ -459,17 +458,19 @@ usertrap(void)
 
   mmix_intr_mask_write(0);
   if (p == 0 || p->state != RUNNING || holding(&p->lock) ||
-      cpuid() != BOOT_CPU_ID || c->trap.user_trapframe != 0 ||
+      p->vm_owner_cpu != cpuid() || c->trap.user_trapframe != 0 ||
       c->trap.active != 0)
     panic("user trap owner");
   trapframe = p->trapframe;
-  if (trapframe == 0 || trapframe->flags != MMIX_PROC_TRAPFRAME_READY ||
+  if (trapframe == 0 || p->pagetable == 0 ||
+      trapframe->flags != MMIX_PROC_TRAPFRAME_READY ||
       trapframe->kernel_state != 0 || trapframe->reserved != 0 ||
       (trapframe->user_state & (sizeof(uint64) - 1)) != 0 ||
       trapframe->user_state < MMIX_USER_REGISTER_STACK_BASE ||
       trapframe->user_state >= MMIX_USER_REGISTER_STACK_TOP ||
       trapframe->user_rv != p->pagetable->rv ||
       trapframe->user_rk != MMIX_PROC_USER_RK ||
+      mmix_ru_cpu_id(trapframe->user_ru) != (uint64)cpuid() ||
       mmix_rv_read() != MMIX_KERNEL_RV || mmix_rk_read() != 0)
     panic("user trap state");
 
@@ -606,7 +607,7 @@ usertrapret(void)
   mmix_intr_mask_write(0);
   c = mycpu();
   p = c->proc;
-  if (cpuid() != BOOT_CPU_ID || p == 0 || p->state != RUNNING ||
+  if (p == 0 || p->state != RUNNING || p->vm_owner_cpu != cpuid() ||
       holding(&p->lock) || c->noff != 0 || c->trap.user_trapframe != 0 ||
       c->trap.active != 0)
     panic("user return owner");
@@ -658,6 +659,7 @@ usertrapret(void)
       trapframe->user_state < MMIX_USER_REGISTER_STACK_BASE ||
       trapframe->user_state >= MMIX_USER_REGISTER_STACK_TOP ||
       (trapframe->rww & MMIX_PHYSICAL_ALIAS_BIT) != 0 ||
+      mmix_ru_cpu_id(trapframe->user_ru) != (uint64)cpuid() ||
       mmix_rv_read() != MMIX_KERNEL_RV || mmix_rk_read() != 0)
     panic("user trap state");
 }
