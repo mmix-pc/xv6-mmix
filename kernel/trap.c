@@ -115,7 +115,7 @@ trap_preempt(struct mmix_trap_state *state, uint32 claim)
   // Complete the rQ handoff now because the assembly restore is also suspended.
   mmix_rq_write(state->rq);
   c->trap.active = 0;
-  yield();
+  yield_pinned();
   if (c->trap.active != 0)
     trap_stop(MMIX_TRAP_EXTERNAL, "preemption active", state, claim);
   // A voluntary scheduler path may leave only the program mask enabled.

@@ -1,5 +1,6 @@
 #include "types.h"
 #include "param.h"
+#include "boot.h"
 #include "memlayout.h"
 #include "mmix.h"
 #include "spinlock.h"
@@ -125,7 +126,8 @@ static int
 proc_slot_clean(struct proc *p)
 {
   return p->chan == 0 && p->killed == 0 && p->xstate == 0 && p->pid == 0 &&
-         p->vm_owner_cpu == -1 && p->name[0] == 0 && p->context.state == 0 &&
+         p->vm_owner_cpu == -1 && p->resume_cpu == -1 &&
+         p->name[0] == 0 && p->context.state == 0 &&
          proc_user_state_empty(p);
 }
 
@@ -137,6 +139,7 @@ proc_clear(struct proc *p, int clear_context)
   p->xstate = 0;
   p->pid = 0;
   p->vm_owner_cpu = -1;
+  p->resume_cpu = -1;
   p->parent = 0;
   p->sz = 0;
   p->lazy_start = 0;
@@ -272,7 +275,7 @@ void
 proc_start(struct proc *p)
 {
   if (p == 0 || !holding(&p->lock) || p->state != USED ||
-      p->context.state == 0 || p->vm_owner_cpu != -1)
+      p->context.state == 0 || p->vm_owner_cpu != -1 || p->resume_cpu != -1)
     panic("proc start");
   // Publish all construction-time page-table work as one completed state.
   if (p->pagetable != 0)
@@ -286,7 +289,8 @@ static void
 proc_release(struct proc *p)
 {
   if (p == 0 || !holding(&p->lock) ||
-      (p->state != USED && p->state != ZOMBIE) || p->vm_owner_cpu != -1)
+      (p->state != USED && p->state != ZOMBIE) || p->vm_owner_cpu != -1 ||
+      p->resume_cpu != -1)
     panic("proc release");
   if (p->pagetable != 0 || p->trapframe != 0 || p->cwd != 0 || p->sz != 0 ||
       p->lazy_start != 0)
@@ -312,6 +316,7 @@ procinit(void)
     p->state = UNUSED;
     p->kstack = KSTACK((int)(p - proc));
     p->vm_owner_cpu = -1;
+    p->resume_cpu = -1;
   }
 }
 
@@ -717,11 +722,16 @@ scheduler(void)
 {
   struct context startup_context;
   struct cpu *c;
+  uint slot;
 
   intr_off();
   c = mycpu();
-  kcontext_prepare(&c->context, MMIX_CONTEXT_SCHEDULER_SLOT(cpuid()),
-                   scheduler_loop);
+  slot = MMIX_CONTEXT_SCHEDULER_SLOT(cpuid());
+  if (kcontext_current_valid(&c->context, slot))
+    scheduler_loop();
+  if (c->context.state != 0)
+    panic("scheduler context");
+  kcontext_prepare(&c->context, slot, scheduler_loop);
   swtch(&startup_context, &c->context);
   panic("scheduler returned");
 }
@@ -734,6 +744,11 @@ scheduler_loop(void)
   struct proc *p;
   struct cpu *c = mycpu();
 
+  if (c->scheduler_entries != 0)
+    panic("scheduler entry");
+  c->scheduler_entries = 1;
+  if (boot_publish_scheduler_ready() < 0)
+    panic("scheduler publish");
   c->proc = 0;
   for (;;) {
     int found = 0;
@@ -742,10 +757,14 @@ scheduler_loop(void)
       // acquire() closes the state-transition and context-switch window.
       intr_on();
       acquire(&p->lock);
-      if (p->state == RUNNABLE) {
+      if (p->state == RUNNABLE &&
+          (p->resume_cpu == -1 || p->resume_cpu == cpuid())) {
         proc_vm_claim_locked(p, c);
         p->state = RUNNING;
         c->proc = p;
+        if (c->scheduler_dispatches == ~0ULL)
+          panic("scheduler dispatch");
+        c->scheduler_dispatches++;
         swtch(&c->context, &p->context);
 
         if (!holding(&p->lock) || c->noff != 1 || intr_get() ||
@@ -792,19 +811,37 @@ sched(void)
 }
 
 // Give up the CPU for one scheduling round.
-void
-yield(void)
+static void
+yield_to_cpu(int resume_cpu)
 {
   struct proc *p = myproc();
 
-  if (p == 0)
+  if (p == 0 || resume_cpu < -1 || resume_cpu >= NCPU)
     panic("yield proc");
   acquire(&p->lock);
-  if (p->state != RUNNING)
+  if (p->state != RUNNING || p->resume_cpu != -1)
     panic("yield state");
+  p->resume_cpu = resume_cpu;
   p->state = RUNNABLE;
   sched();
+  if (resume_cpu != -1) {
+    if (p->resume_cpu != cpuid())
+      panic("yield CPU");
+    p->resume_cpu = -1;
+  }
   release(&p->lock);
+}
+
+void
+yield(void)
+{
+  yield_to_cpu(-1);
+}
+
+void
+yield_pinned(void)
+{
+  yield_to_cpu(cpuid());
 }
 
 static void

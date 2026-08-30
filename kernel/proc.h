@@ -119,6 +119,7 @@ struct proc {
   int xstate;           // Exit status to be returned to parent's wait
   int pid;              // Process ID
   int vm_owner_cpu;     // CPU owning this address space, or -1.
+  int resume_cpu;       // Required CPU for a live CPU-owned continuation.
   uint64 vm_generation; // Completed page-table mutation generation.
 
   // wait_lock must be held when using this:

@@ -69,6 +69,8 @@ main(void)
     panic("interrupt ready");
   intr_off();
   userinit();         // first user process
+  if (boot_release_schedulers() < 0)
+    panic("scheduler release");
 
   scheduler();
 }

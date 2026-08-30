@@ -29,6 +29,7 @@ enum mmix_startup_state {
   MMIX_STARTUP_COLLECTING = 1,
   MMIX_STARTUP_INITIALIZING = 2,
   MMIX_STARTUP_GLOBAL_READY = 3,
+  MMIX_STARTUP_SCHEDULER_RELEASED = 4,
   MMIX_STARTUP_FAILED = 255,
 };
 
@@ -45,6 +46,7 @@ enum mmix_cpu_startup_stage {
   MMIX_CPU_STAGE_INTERRUPT_READY = 9,
   MMIX_CPU_STAGE_SERVICE = 10,
   MMIX_CPU_STAGE_SECONDARY_IDLE = 11,
+  MMIX_CPU_STAGE_SCHEDULER = 12,
 };
 
 enum mmix_startup_failure {
@@ -96,6 +98,9 @@ int boot_publish_global_ready(void);
 int boot_wait_for_online(void);
 int boot_publish_interrupt_ready(void);
 int boot_wait_for_interrupt_ready(void);
+int boot_release_schedulers(void);
+int boot_wait_for_scheduler_release(void);
+int boot_publish_scheduler_ready(void);
 
 _Static_assert(sizeof(struct mmix_boot_handoff) == 6 * sizeof(uint64),
                "unexpected MMIX boot handoff size");

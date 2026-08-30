@@ -1,4 +1,5 @@
 #include "mmix.h"
+#include "boot.h"
 #include "cpu.h"
 #include "defs.h"
 #include "kcontext.h"
@@ -71,6 +72,7 @@ cpu_secondary_idle(uint64 ready_address)
   void (*ready)(void) = (void (*)(void))ready_address;
 
   ready();
-  for (;;)
-    cpu_idle();
+  if (boot_wait_for_scheduler_release() < 0)
+    panic("scheduler release");
+  scheduler();
 }

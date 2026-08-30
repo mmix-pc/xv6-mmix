@@ -492,6 +492,97 @@ fail:
 }
 
 int
+boot_release_schedulers(void)
+{
+  uint64 cpu_count = mmix_boot.info.cpu_count;
+  uint64 expected_mask = startup_expected_mask(cpu_count);
+
+  if (cpuid() != BOOT_CPU_ID || intr_get() || mycpu()->proc != 0 ||
+      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+        MMIX_STARTUP_GLOBAL_READY ||
+      __atomic_load_n(&mmix_startup.interrupt_ready, __ATOMIC_ACQUIRE) !=
+        expected_mask ||
+      __atomic_load_n(&mmix_startup.cpu_stage[BOOT_CPU_ID],
+                      __ATOMIC_ACQUIRE) != MMIX_CPU_STAGE_SERVICE)
+    goto fail;
+  for (uint64 cpu_id = 0; cpu_id < cpu_count; cpu_id++) {
+    uint64 expected_stage = cpu_id == BOOT_CPU_ID ?
+      MMIX_CPU_STAGE_SERVICE : MMIX_CPU_STAGE_SECONDARY_IDLE;
+
+    if (__atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
+                        __ATOMIC_ACQUIRE) != expected_stage ||
+        cpus[cpu_id].proc != 0 || cpus[cpu_id].scheduler_entries != 0 ||
+        cpus[cpu_id].scheduler_dispatches != 0)
+      goto fail;
+  }
+  __atomic_store_n(&mmix_startup.state, MMIX_STARTUP_SCHEDULER_RELEASED,
+                   __ATOMIC_RELEASE);
+  return 0;
+
+fail:
+  startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+  return -1;
+}
+
+int
+boot_wait_for_scheduler_release(void)
+{
+  uint64 cpu_id = cpuid();
+
+  if (cpu_id == BOOT_CPU_ID || cpu_id >= mmix_boot.info.cpu_count ||
+      !intr_get() ||
+      __atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
+                      __ATOMIC_ACQUIRE) != MMIX_CPU_STAGE_SECONDARY_IDLE)
+    goto fail;
+  for (;;) {
+    uint64 state = __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE);
+
+    if (state == MMIX_STARTUP_SCHEDULER_RELEASED)
+      return 0;
+    if (state == MMIX_STARTUP_FAILED)
+      return -1;
+    if (state != MMIX_STARTUP_GLOBAL_READY)
+      goto fail;
+    cpu_idle();
+  }
+
+fail:
+  startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+  return -1;
+}
+
+int
+boot_publish_scheduler_ready(void)
+{
+  struct cpu *c = mycpu();
+  uint64 cpu_id = cpuid();
+  uint64 expected_stage = cpu_id == BOOT_CPU_ID ?
+    MMIX_CPU_STAGE_SERVICE : MMIX_CPU_STAGE_SECONDARY_IDLE;
+
+  if (cpu_id >= mmix_boot.info.cpu_count || c != &cpus[cpu_id] ||
+      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+        MMIX_STARTUP_SCHEDULER_RELEASED ||
+      c->proc != 0 || c->scheduler_entries != 1 ||
+      c->scheduler_dispatches != 0 || c->noff != 0 || c->trap.active != 0 ||
+      c->trap.user_trapframe != 0 || intr_get() ||
+      !kcontext_current_valid(&c->context,
+                              MMIX_CONTEXT_SCHEDULER_SLOT(cpu_id)))
+    goto fail;
+  if (!__atomic_compare_exchange_n(&mmix_startup.cpu_stage[cpu_id],
+                                   &expected_stage,
+                                   MMIX_CPU_STAGE_SCHEDULER, 0,
+                                   __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
+    goto fail;
+  printk("scheduler-ready: cpu=%d context=%p\n", (int)cpu_id,
+         (void *)c->context.state);
+  return 0;
+
+fail:
+  startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
+  return -1;
+}
+
+int
 boot_publish_global_ready(void)
 {
   if (cpuid() != BOOT_CPU_ID ||
