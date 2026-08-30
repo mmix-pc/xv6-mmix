@@ -529,14 +529,19 @@ vmfault(pagetable_t pagetable, uint64 va, int permissions)
 {
   struct proc *p = myproc();
   uint64 page_va = PGROUNDDOWN(va);
+  uint64 result;
   pte_t *leaf;
   int status;
   void *page;
 
-  if (p == 0 || pagetable == 0 || pagetable != p->pagetable ||
+  if (p == 0)
+    return 0;
+  acquire(&p->lock);
+  if (p->state != RUNNING || p->vm_owner_cpu != cpuid() || pagetable == 0 ||
+      pagetable != p->pagetable ||
       MMIX_RV_F(pagetable->rv) != MMIX_RV_F_SOFTWARE ||
       (permissions != 0 && !permissions_valid((uint64)permissions)))
-    return 0;
+    goto fail;
 
   status = walk_leaf(pagetable, page_va, 0, &leaf);
   if (status == WALK_OK && *leaf != 0) {
@@ -544,28 +549,37 @@ vmfault(pagetable_t pagetable, uint64 va, int permissions)
         (permissions != 0 &&
          (mmix_pte_permissions(*leaf) & (uint64)permissions) !=
            (uint64)permissions))
-      return 0;
-    return *leaf;
+      goto fail;
+    result = *leaf;
+    release(&p->lock);
+    return result;
   }
   if ((status != WALK_ABSENT && status != WALK_OK) ||
       (status == WALK_OK && *leaf != 0) || permissions == 0 ||
       (permissions & PTE_X) != 0 ||
       p->lazy_start == 0 || va < p->lazy_start || va >= p->sz)
-    return 0;
+    goto fail;
 
   page = kalloc();
   if (page == 0)
-    return 0;
+    goto fail;
   memset(page, 0, PGSIZE);
   if (mappages(pagetable, page_va, PGSIZE, (uint64)page,
                PTE_R | PTE_W) < 0) {
     kfree(page);
-    return 0;
+    goto fail;
   }
   leaf = walk(pagetable, page_va, 0);
   if (leaf == 0 || !leaf_valid(pagetable, *leaf))
     panic("vmfault mapping");
-  return *leaf;
+  proc_vm_mutated(p);
+  result = *leaf;
+  release(&p->lock);
+  return result;
+
+fail:
+  release(&p->lock);
+  return 0;
 }
 
 static int

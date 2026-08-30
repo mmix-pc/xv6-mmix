@@ -637,6 +637,8 @@ usertrapret(void)
       mmix_rs_read() >= p->kstack + 3 * PGSIZE)
     panic("user return stack");
 
+  proc_vm_prepare_user(p);
+
   alias = mmix_phys_alias((uint64)trapframe);
   // Preserve the user usage mask and count, but never its CPU selector.
   trapframe->user_ru = mmix_ru_bind_cpu(trapframe->user_ru, cpuid());

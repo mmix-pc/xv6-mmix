@@ -50,6 +50,16 @@ static struct spinlock pid_lock;
 static struct spinlock wait_lock;
 static struct proc *initproc;
 
+enum {
+  MMIX_VM_STATE_ASN_BITS = 10,
+};
+
+#define MMIX_VM_GENERATION_LIMIT (~(uint64)0 >> MMIX_VM_STATE_ASN_BITS)
+
+_Static_assert(MMIX_RV_N_VALUE_MASK ==
+                 ((1U << MMIX_VM_STATE_ASN_BITS) - 1),
+               "VM state must preserve the complete MMIX ASN");
+
 static uint
 proc_index(struct proc *p)
 {
@@ -115,7 +125,7 @@ static int
 proc_slot_clean(struct proc *p)
 {
   return p->chan == 0 && p->killed == 0 && p->xstate == 0 && p->pid == 0 &&
-         p->name[0] == 0 && p->context.state == 0 &&
+         p->vm_owner_cpu == -1 && p->name[0] == 0 && p->context.state == 0 &&
          proc_user_state_empty(p);
 }
 
@@ -126,6 +136,7 @@ proc_clear(struct proc *p, int clear_context)
   p->killed = 0;
   p->xstate = 0;
   p->pid = 0;
+  p->vm_owner_cpu = -1;
   p->parent = 0;
   p->sz = 0;
   p->lazy_start = 0;
@@ -137,6 +148,89 @@ proc_clear(struct proc *p, int clear_context)
   p->name[0] = 0;
   if (clear_context)
     memset(&p->context, 0, sizeof(p->context));
+}
+
+static void
+proc_vm_advance_locked(struct proc *p)
+{
+  if (p == 0 || !holding(&p->lock) || p->vm_owner_cpu < -1 ||
+      p->vm_owner_cpu >= NCPU ||
+      p->vm_generation == MMIX_VM_GENERATION_LIMIT)
+    panic("vm generation");
+  p->vm_generation++;
+}
+
+static uint64
+proc_vm_state(struct proc *p)
+{
+  uint64 asn;
+
+  if (p == 0 || p->pagetable == 0 || p->vm_generation == 0 ||
+      p->vm_generation > MMIX_VM_GENERATION_LIMIT)
+    panic("vm state");
+  asn = MMIX_RV_N(p->pagetable->rv);
+  if (asn < MMIX_USER_ASN_FIRST || asn > MMIX_USER_ASN_LAST)
+    panic("vm asn");
+  return (p->vm_generation << MMIX_VM_STATE_ASN_BITS) | asn;
+}
+
+static void
+proc_vm_claim_locked(struct proc *p, struct cpu *c)
+{
+  int id = cpuid();
+
+  if (p == 0 || c == 0 || !holding(&p->lock) || p->state != RUNNABLE ||
+      p->pagetable == 0 || p->vm_owner_cpu != -1 || c != &cpus[id] ||
+      c->proc != 0)
+    panic("vm claim");
+  (void)proc_vm_state(p);
+  p->vm_owner_cpu = id;
+}
+
+static void
+proc_vm_release_locked(struct proc *p, struct cpu *c)
+{
+  int id = cpuid();
+
+  if (p == 0 || c == 0 || !holding(&p->lock) || p->state == RUNNING ||
+      p->vm_owner_cpu != id || c != &cpus[id] || c->proc != p ||
+      c->trap.user_trapframe != 0 || mmix_rv_read() != MMIX_KERNEL_RV)
+    panic("vm release");
+  p->vm_owner_cpu = -1;
+}
+
+void
+proc_vm_mutated(struct proc *p)
+{
+  struct cpu *c = mycpu();
+
+  if (p == 0 || !holding(&p->lock) || p->state != RUNNING || c->proc != p ||
+      p->vm_owner_cpu != cpuid() || p->pagetable == 0 ||
+      mmix_rv_read() != MMIX_KERNEL_RV)
+    panic("vm mutation");
+  proc_vm_advance_locked(p);
+}
+
+// Establish a fresh local translation view before assembly loads the user rV.
+void
+proc_vm_prepare_user(struct proc *p)
+{
+  struct cpu *c = mycpu();
+  uint64 state;
+
+  if (p == 0 || c->proc != p || p->state != RUNNING ||
+      p->vm_owner_cpu != cpuid() || holding(&p->lock) || intr_get() ||
+      mmix_rv_read() != MMIX_KERNEL_RV)
+    panic("vm prepare");
+  state = proc_vm_state(p);
+  if (c->user_translation == state)
+    return;
+
+  // P2.5 invalidates only this CPU; P2.6 adds acknowledged remote shootdown.
+  mmix_rv_publish(MMIX_KERNEL_RV);
+  if (mmix_rv_read() != MMIX_KERNEL_RV)
+    panic("vm invalidate");
+  c->user_translation = state;
 }
 
 // Allocate a process-table slot and its initial kernel context. Return with the
@@ -170,8 +264,10 @@ void
 proc_start(struct proc *p)
 {
   if (p == 0 || !holding(&p->lock) || p->state != USED ||
-      p->context.state == 0)
+      p->context.state == 0 || p->pagetable == 0 || p->vm_owner_cpu != -1)
     panic("proc start");
+  // Publish all construction-time page-table work as one completed state.
+  proc_vm_advance_locked(p);
   p->state = RUNNABLE;
   release(&p->lock);
 }
@@ -181,7 +277,7 @@ static void
 proc_release(struct proc *p)
 {
   if (p == 0 || !holding(&p->lock) ||
-      (p->state != USED && p->state != ZOMBIE))
+      (p->state != USED && p->state != ZOMBIE) || p->vm_owner_cpu != -1)
     panic("proc release");
   if (p->pagetable != 0 || p->trapframe != 0 || p->cwd != 0 || p->sz != 0 ||
       p->lazy_start != 0)
@@ -206,6 +302,7 @@ procinit(void)
     initlock(&p->lock, "proc");
     p->state = UNUSED;
     p->kstack = KSTACK((int)(p - proc));
+    p->vm_owner_cpu = -1;
   }
 }
 
@@ -234,7 +331,7 @@ static void
 proc_user_free(struct proc *p)
 {
   if (p == 0 || !holding(&p->lock) ||
-      (p->state != USED && p->state != ZOMBIE))
+      (p->state != USED && p->state != ZOMBIE) || p->vm_owner_cpu != -1)
     panic("proc user free");
   if (p->pagetable != 0) {
     proc_freepagetable(p->pagetable, p->sz);
@@ -352,10 +449,18 @@ proc_exec(pagetable_t pagetable, uint64 sz, uint64 entry, uint64 stack,
 
   oldpagetable = p->pagetable;
   oldsz = p->sz;
+  acquire(&p->lock);
+  if (p->state != RUNNING || p->vm_owner_cpu != cpuid() ||
+      p->pagetable != oldpagetable) {
+    release(&p->lock);
+    return -1;
+  }
   p->pagetable = pagetable;
   p->sz = sz;
   p->lazy_start = 0;
   *p->trapframe = next;
+  proc_vm_mutated(p);
+  release(&p->lock);
   proc_freepagetable(oldpagetable, oldsz);
   return 0;
 }
@@ -519,21 +624,25 @@ proc_user_grow(struct proc *p, int n)
   uint64 oldsz;
   uint64 newsz;
 
-  if (p == 0 || p->pagetable == 0 || p->trapframe == 0 ||
-      p->sz < MMIX_USER_IMAGE_BASE)
+  if (p == 0)
     return -1;
+  acquire(&p->lock);
+  if (p->state != RUNNING || p->vm_owner_cpu != cpuid() ||
+      p->pagetable == 0 || p->trapframe == 0 ||
+      p->sz < MMIX_USER_IMAGE_BASE)
+    goto fail;
   oldsz = p->sz;
   if (n > 0) {
     if ((uint64)n > MMIX_USER_HEAP_LIMIT - oldsz)
-      return -1;
+      goto fail;
     newsz = oldsz + (uint64)n;
     if (uvmalloc(p->pagetable, oldsz, newsz, PTE_W) == 0)
-      return -1;
+      goto fail;
   } else if (n < 0) {
     // Match xv6: an unsigned underflow is a successful no-op in uvmdealloc().
     newsz = oldsz + (long)n;
     if (newsz < MMIX_USER_IMAGE_BASE)
-      return -1;
+      goto fail;
     newsz = uvmdealloc(p->pagetable, oldsz, newsz);
     if (p->lazy_start != 0 && newsz <= p->lazy_start) {
       // No sparse interval remains, so hardware walks are sufficient again.
@@ -543,10 +652,17 @@ proc_user_grow(struct proc *p, int n)
       p->trapframe->user_rv = p->pagetable->rv;
     }
   } else {
+    release(&p->lock);
     return 0;
   }
   p->sz = newsz;
+  proc_vm_mutated(p);
+  release(&p->lock);
   return 0;
+
+fail:
+  release(&p->lock);
+  return -1;
 }
 
 int
@@ -618,6 +734,7 @@ scheduler_loop(void)
       intr_on();
       acquire(&p->lock);
       if (p->state == RUNNABLE) {
+        proc_vm_claim_locked(p, c);
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
@@ -630,6 +747,7 @@ scheduler_loop(void)
             panic("scheduler release");
           memset(&p->context, 0, sizeof(p->context));
         }
+        proc_vm_release_locked(p, c);
         c->proc = 0;
         found = 1;
       }

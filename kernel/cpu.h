@@ -11,7 +11,8 @@
 #define MMIX_CPU_INTERRUPT_ENTRIES_OFFSET 40
 #define MMIX_CPU_INTERRUPT_RETURNS_OFFSET 48
 #define MMIX_CPU_USER_TRAPFRAME_OFFSET    56
-#define MMIX_CPU_SIZE                     64
+#define MMIX_CPU_USER_TRANSLATION_OFFSET  64
+#define MMIX_CPU_SIZE                     72
 
 #if !defined(__ASSEMBLER__)
 
@@ -42,6 +43,8 @@ struct cpu {
   int noff;                      // Depth of push_off() nesting.
   int intena;                    // Interrupt state before push_off().
   struct cpu_trap_state trap;    // CPU-owned dynamic-trap state.
+  // Last process ASN and generation made locally translation-fresh.
+  uint64 user_translation;
 };
 
 #define MMIX_ASSERT_CPU_OFFSET(member, offset)                               \
@@ -67,6 +70,8 @@ _Static_assert(__builtin_offsetof(struct cpu, trap.interrupt_returns) ==
 _Static_assert(__builtin_offsetof(struct cpu, trap.user_trapframe) ==
                  MMIX_CPU_USER_TRAPFRAME_OFFSET,
                "MMIX CPU user-trapframe offset mismatch");
+MMIX_ASSERT_CPU_OFFSET(user_translation,
+                       MMIX_CPU_USER_TRANSLATION_OFFSET);
 _Static_assert(sizeof(struct cpu) == MMIX_CPU_SIZE,
                "MMIX CPU size mismatch");
 

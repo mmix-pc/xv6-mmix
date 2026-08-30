@@ -118,6 +118,8 @@ struct proc {
   int killed;           // If non-zero, have been killed
   int xstate;           // Exit status to be returned to parent's wait
   int pid;              // Process ID
+  int vm_owner_cpu;     // CPU owning this address space, or -1.
+  uint64 vm_generation; // Completed page-table mutation generation.
 
   // wait_lock must be held when using this:
   struct proc *parent; // Parent process
@@ -133,6 +135,10 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 };
+
+// MMIX address-space ownership shared by the process, VM, and trap modules.
+void proc_vm_mutated(struct proc *p);
+void proc_vm_prepare_user(struct proc *p);
 
 #endif // !__ASSEMBLER__
 
