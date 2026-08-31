@@ -18,11 +18,16 @@ struct ipi_target_state {
   uint64 requested;
   uint64 acknowledged;
   uint64 received;
+  uint64 work_classes;
+  uint64 work_generation;
+  uint64 work_acknowledged;
 };
 
 static struct ipi_target_state ipi_targets[MMIX_MAX_CPUS];
 static uint64 ipi_generation;
 static uint32 ipi_send_lock;
+
+#define MMIX_IPI_WORK_VALID MMIX_IPI_WORK_TRANSLATION
 
 static uint64
 ipi_active_targets(void)
@@ -122,6 +127,9 @@ ipi_init(void)
   __atomic_store_n(&target->requested, 0, __ATOMIC_RELAXED);
   __atomic_store_n(&target->acknowledged, 0, __ATOMIC_RELAXED);
   __atomic_store_n(&target->received, 0, __ATOMIC_RELAXED);
+  __atomic_store_n(&target->work_classes, 0, __ATOMIC_RELAXED);
+  __atomic_store_n(&target->work_generation, 0, __ATOMIC_RELAXED);
+  __atomic_store_n(&target->work_acknowledged, 0, __ATOMIC_RELAXED);
   status = ipi_context_register(id, MMIX_IPI_CONTEXT_STATUS_OFFSET);
   if ((ipi_read(status) & ~MMIX_IPI_STATUS_PENDING) != 0)
     return MMIX_IPI_BAD_STATE;
@@ -171,6 +179,61 @@ ipi_send(uint64 targets, uint64 *generation)
 }
 
 int
+ipi_send_work(uint64 targets, uint64 classes, uint64 *generation)
+{
+  struct ipi_target_state *target;
+  uint64 acknowledged;
+  uint64 allocated;
+  uint64 active;
+  uint64 published;
+  int status;
+
+  if (generation == 0 || targets == 0 || classes == 0 ||
+      (classes & ~MMIX_IPI_WORK_VALID) != 0)
+    return MMIX_IPI_BAD_ARGUMENT;
+  if (!ipi_current_valid())
+    return MMIX_IPI_BAD_PLATFORM;
+  active = ipi_active_targets();
+  if ((targets & ~active) != 0)
+    return MMIX_IPI_BAD_TARGET;
+
+  while (__atomic_exchange_n(&ipi_send_lock, 1, __ATOMIC_ACQUIRE) != 0)
+    ;
+  for (uint32 id = 0; id < mmix_boot.info.ipi_target_count; id++) {
+    if ((targets & (1ULL << id)) == 0)
+      continue;
+    target = &ipi_targets[id];
+    published = __atomic_load_n(&target->work_generation, __ATOMIC_ACQUIRE);
+    acknowledged =
+      __atomic_load_n(&target->work_acknowledged, __ATOMIC_ACQUIRE);
+    if (__atomic_load_n(&target->work_classes, __ATOMIC_ACQUIRE) != 0 ||
+        published != acknowledged) {
+      __atomic_store_n(&ipi_send_lock, 0, __ATOMIC_RELEASE);
+      return MMIX_IPI_BAD_STATE;
+    }
+  }
+  status = ipi_allocate_generation(&allocated);
+  if (status != MMIX_IPI_OK) {
+    __atomic_store_n(&ipi_send_lock, 0, __ATOMIC_RELEASE);
+    return status;
+  }
+
+  for (uint32 id = 0; id < mmix_boot.info.ipi_target_count; id++) {
+    if ((targets & (1ULL << id)) == 0)
+      continue;
+    target = &ipi_targets[id];
+    __atomic_store_n(&target->work_generation, allocated, __ATOMIC_RELAXED);
+    __atomic_store_n(&target->work_classes, classes, __ATOMIC_RELEASE);
+    __atomic_store_n(&target->requested, allocated, __ATOMIC_RELEASE);
+  }
+
+  ipi_write(MMIX_IPI_SEND_OFFSET, targets);
+  *generation = allocated;
+  __atomic_store_n(&ipi_send_lock, 0, __ATOMIC_RELEASE);
+  return MMIX_IPI_OK;
+}
+
+int
 ipi_pending(int *pending)
 {
   uint64 status;
@@ -188,13 +251,16 @@ ipi_pending(int *pending)
 }
 
 int
-ipi_service(void)
+ipi_service(ipi_work_handler handler)
 {
   struct ipi_target_state *target;
   uint64 acknowledged;
   uint64 latest;
   uint64 observed;
   uint64 received;
+  uint64 work_acknowledged;
+  uint64 work_classes;
+  uint64 work_generation;
   int pending;
   int id = cpuid();
 
@@ -207,6 +273,28 @@ ipi_service(void)
   if (observed == 0 || observed <= acknowledged || received == ~0ULL)
     return MMIX_IPI_BAD_STATE;
 
+  work_classes = __atomic_load_n(&target->work_classes, __ATOMIC_ACQUIRE);
+  if ((work_classes & ~MMIX_IPI_WORK_VALID) != 0)
+    return MMIX_IPI_BAD_STATE;
+  if (work_classes != 0) {
+    work_generation =
+      __atomic_load_n(&target->work_generation, __ATOMIC_RELAXED);
+    work_acknowledged =
+      __atomic_load_n(&target->work_acknowledged, __ATOMIC_RELAXED);
+    if (work_generation == 0 || work_generation <= work_acknowledged)
+      return MMIX_IPI_BAD_STATE;
+    if (work_generation <= observed) {
+      if (handler == 0 ||
+          handler(work_classes, work_generation) != MMIX_IPI_OK)
+        return MMIX_IPI_BAD_STATE;
+      // Clear the published work before acknowledging it. A sender that sees
+      // the acknowledgement can then safely reuse this target's work slot.
+      __atomic_store_n(&target->work_classes, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&target->work_acknowledged, work_generation,
+                       __ATOMIC_RELEASE);
+    }
+  }
+
   ipi_write(ipi_context_register(id, MMIX_IPI_CONTEXT_CLEAR_OFFSET),
             MMIX_IPI_STATUS_PENDING);
   __atomic_store_n(&target->acknowledged, observed, __ATOMIC_RELEASE);
@@ -217,6 +305,30 @@ ipi_service(void)
   latest = __atomic_load_n(&target->requested, __ATOMIC_ACQUIRE);
   if (latest != observed)
     ipi_write(MMIX_IPI_SEND_OFFSET, 1ULL << id);
+  return MMIX_IPI_OK;
+}
+
+int
+ipi_work_acknowledged(uint32 target, uint64 classes, uint64 generation,
+                      int *acknowledged)
+{
+  struct ipi_target_state *state;
+  uint64 published;
+  uint64 value;
+
+  if (acknowledged == 0 || generation == 0 || classes == 0 ||
+      (classes & ~MMIX_IPI_WORK_VALID) != 0)
+    return MMIX_IPI_BAD_ARGUMENT;
+  if (!ipi_current_valid())
+    return MMIX_IPI_BAD_PLATFORM;
+  if (!ipi_target_valid(target))
+    return MMIX_IPI_BAD_TARGET;
+  state = &ipi_targets[target];
+  published = __atomic_load_n(&state->work_generation, __ATOMIC_ACQUIRE);
+  value = __atomic_load_n(&state->work_acknowledged, __ATOMIC_ACQUIRE);
+  if (published < generation || value > published)
+    return MMIX_IPI_BAD_STATE;
+  *acknowledged = value >= generation;
   return MMIX_IPI_OK;
 }
 
