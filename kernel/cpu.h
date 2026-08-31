@@ -45,7 +45,7 @@ struct cpu {
   int noff;                      // Depth of push_off() nesting.
   int intena;                    // Interrupt state before push_off().
   struct cpu_trap_state trap;    // CPU-owned dynamic-trap state.
-  // Last process ASN and generation made locally translation-fresh.
+  // Diagnostic summary of the last process translation prepared here.
   uint64 user_translation;
   uint64 scheduler_entries;      // Permanent scheduler-loop entries.
   uint64 scheduler_dispatches;   // Processes selected by this CPU.

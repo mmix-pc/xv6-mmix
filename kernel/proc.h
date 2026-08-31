@@ -122,6 +122,11 @@ struct proc {
   int resume_cpu;       // Required CPU for a live CPU-owned continuation.
   uint64 vm_generation; // Completed page-table mutation generation.
 
+  // Residency changes are serialized by p->lock. Each CPU's local generation
+  // is also suitable for target-local atomic shootdown completion.
+  uint64 vm_resident_cpus; // CPUs that may retain this slot's ASN.
+  uint64 vm_cpu_generation[NCPU];
+
   // wait_lock must be held when using this:
   struct proc *parent; // Parent process
 

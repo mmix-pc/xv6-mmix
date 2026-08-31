@@ -41,6 +41,8 @@ _Static_assert(sizeof(struct mmix_initial_user_context) ==
                "MMIX initial user state size mismatch");
 _Static_assert(NPROC == MMIX_USER_ASN_LAST - MMIX_USER_ASN_FIRST + 1,
                "process slots must have one MMIX user ASN each");
+_Static_assert(NCPU > 0 && NCPU < 64,
+               "VM residency must fit in one nonzero CPU mask");
 
 struct cpu cpus[NCPU];
 struct proc proc[NPROC];
@@ -134,6 +136,8 @@ proc_slot_clean(struct proc *p)
 static void
 proc_clear(struct proc *p, int clear_context)
 {
+  // Preserve translation generations and residency across slot release so a
+  // reused ASN remains distinguishable until its old translations retire.
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
@@ -154,12 +158,41 @@ proc_clear(struct proc *p, int clear_context)
 }
 
 static void
+proc_vm_tracking_valid_locked(struct proc *p)
+{
+  uint64 cpu_count = mmix_boot.info.cpu_count;
+  uint64 residents;
+  uint64 valid_cpus;
+
+  if (p == 0 || !holding(&p->lock) || cpu_count == 0 || cpu_count > NCPU)
+    panic("vm tracking");
+  valid_cpus = (1ULL << cpu_count) - 1;
+  residents = __atomic_load_n(&p->vm_resident_cpus, __ATOMIC_RELAXED);
+  if (p->vm_owner_cpu < -1 ||
+      (p->vm_owner_cpu >= 0 && (uint64)p->vm_owner_cpu >= cpu_count) ||
+      (residents & ~valid_cpus) != 0)
+    panic("vm residents");
+  for (uint64 cpu_id = 0; cpu_id < cpu_count; cpu_id++) {
+    uint64 generation = __atomic_load_n(&p->vm_cpu_generation[cpu_id],
+                                         __ATOMIC_RELAXED);
+
+    if (generation > p->vm_generation ||
+        ((residents & (1ULL << cpu_id)) != 0 && generation == 0))
+      panic("vm CPU generation");
+  }
+  for (uint64 cpu_id = cpu_count; cpu_id < NCPU; cpu_id++)
+    if (__atomic_load_n(&p->vm_cpu_generation[cpu_id],
+                        __ATOMIC_RELAXED) != 0)
+      panic("vm offline generation");
+}
+
+static void
 proc_vm_advance_locked(struct proc *p)
 {
-  if (p == 0 || !holding(&p->lock) || p->vm_owner_cpu < -1 ||
-      p->vm_owner_cpu >= NCPU ||
+  if (p == 0 || !holding(&p->lock) ||
       p->vm_generation == MMIX_VM_GENERATION_LIMIT)
     panic("vm generation");
+  proc_vm_tracking_valid_locked(p);
   p->vm_generation++;
 }
 
@@ -185,6 +218,7 @@ proc_vm_claim_locked(struct proc *p, struct cpu *c)
   if (p == 0 || c == 0 || !holding(&p->lock) || p->state != RUNNABLE ||
       p->vm_owner_cpu != -1 || c != &cpus[id] || c->proc != 0)
     panic("vm claim");
+  proc_vm_tracking_valid_locked(p);
   if (p->pagetable == 0)
     return;
   (void)proc_vm_state(p);
@@ -200,6 +234,7 @@ proc_vm_release_locked(struct proc *p, struct cpu *c)
       c != &cpus[id] || c->proc != p || c->trap.user_trapframe != 0 ||
       mmix_rv_read() != MMIX_KERNEL_RV)
     panic("vm release");
+  proc_vm_tracking_valid_locked(p);
   if (p->pagetable == 0) {
     if (p->vm_owner_cpu != -1)
       panic("vm kernel owner");
@@ -227,21 +262,38 @@ void
 proc_vm_prepare_user(struct proc *p)
 {
   struct cpu *c = mycpu();
+  int cpu_id = cpuid();
+  uint64 generation;
+  uint64 resident_bit;
   uint64 state;
 
   if (p == 0 || c->proc != p || p->state != RUNNING ||
-      p->vm_owner_cpu != cpuid() || holding(&p->lock) || intr_get() ||
+      p->vm_owner_cpu != cpu_id || holding(&p->lock) || intr_get() ||
       mmix_rv_read() != MMIX_KERNEL_RV)
     panic("vm prepare");
+  acquire(&p->lock);
+  if (c->proc != p || p->state != RUNNING ||
+      p->vm_owner_cpu != cpu_id || intr_get() ||
+      mmix_rv_read() != MMIX_KERNEL_RV)
+    panic("vm prepare owner");
+  proc_vm_tracking_valid_locked(p);
   state = proc_vm_state(p);
-  if (c->user_translation == state)
-    return;
+  generation = p->vm_generation;
+  resident_bit = 1ULL << cpu_id;
 
-  // P2.5 invalidates only this CPU; P2.6 adds acknowledged remote shootdown.
-  mmix_rv_publish(MMIX_KERNEL_RV);
-  if (mmix_rv_read() != MMIX_KERNEL_RV)
-    panic("vm invalidate");
+  if (__atomic_load_n(&p->vm_cpu_generation[cpu_id],
+                      __ATOMIC_RELAXED) != generation) {
+    // Establish local freshness before user entry. The resident set records
+    // which other CPUs may require invalidation after a live mapping change.
+    mmix_rv_publish(MMIX_KERNEL_RV);
+    if (mmix_rv_read() != MMIX_KERNEL_RV)
+      panic("vm invalidate");
+    __atomic_store_n(&p->vm_cpu_generation[cpu_id], generation,
+                     __ATOMIC_RELAXED);
+  }
+  __atomic_fetch_or(&p->vm_resident_cpus, resident_bit, __ATOMIC_RELAXED);
   c->user_translation = state;
+  release(&p->lock);
 }
 
 // Allocate a process-table slot and its initial kernel context. Return with the
@@ -317,6 +369,9 @@ procinit(void)
     p->kstack = KSTACK((int)(p - proc));
     p->vm_owner_cpu = -1;
     p->resume_cpu = -1;
+    p->vm_generation = 0;
+    p->vm_resident_cpus = 0;
+    memset(p->vm_cpu_generation, 0, sizeof(p->vm_cpu_generation));
   }
 }
 
