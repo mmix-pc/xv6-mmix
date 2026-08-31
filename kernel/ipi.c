@@ -20,6 +20,7 @@ struct ipi_target_state {
   uint64 received;
   uint64 work_classes;
   uint64 work_generation;
+  uint64 work_notification;
   uint64 work_acknowledged;
 };
 
@@ -129,6 +130,7 @@ ipi_init(void)
   __atomic_store_n(&target->received, 0, __ATOMIC_RELAXED);
   __atomic_store_n(&target->work_classes, 0, __ATOMIC_RELAXED);
   __atomic_store_n(&target->work_generation, 0, __ATOMIC_RELAXED);
+  __atomic_store_n(&target->work_notification, 0, __ATOMIC_RELAXED);
   __atomic_store_n(&target->work_acknowledged, 0, __ATOMIC_RELAXED);
   status = ipi_context_register(id, MMIX_IPI_CONTEXT_STATUS_OFFSET);
   if ((ipi_read(status) & ~MMIX_IPI_STATUS_PENDING) != 0)
@@ -179,7 +181,8 @@ ipi_send(uint64 targets, uint64 *generation)
 }
 
 int
-ipi_send_work(uint64 targets, uint64 classes, uint64 *generation)
+ipi_send_work(uint64 targets, uint64 classes, uint64 work_generation,
+              uint64 *notification_generation)
 {
   struct ipi_target_state *target;
   uint64 acknowledged;
@@ -188,7 +191,8 @@ ipi_send_work(uint64 targets, uint64 classes, uint64 *generation)
   uint64 published;
   int status;
 
-  if (generation == 0 || targets == 0 || classes == 0 ||
+  if (notification_generation == 0 || work_generation == 0 || targets == 0 ||
+      classes == 0 ||
       (classes & ~MMIX_IPI_WORK_VALID) != 0)
     return MMIX_IPI_BAD_ARGUMENT;
   if (!ipi_current_valid())
@@ -222,13 +226,16 @@ ipi_send_work(uint64 targets, uint64 classes, uint64 *generation)
     if ((targets & (1ULL << id)) == 0)
       continue;
     target = &ipi_targets[id];
-    __atomic_store_n(&target->work_generation, allocated, __ATOMIC_RELAXED);
+    __atomic_store_n(&target->work_generation, work_generation,
+                     __ATOMIC_RELAXED);
+    __atomic_store_n(&target->work_notification, allocated,
+                     __ATOMIC_RELAXED);
     __atomic_store_n(&target->work_classes, classes, __ATOMIC_RELEASE);
     __atomic_store_n(&target->requested, allocated, __ATOMIC_RELEASE);
   }
 
   ipi_write(MMIX_IPI_SEND_OFFSET, targets);
-  *generation = allocated;
+  *notification_generation = allocated;
   __atomic_store_n(&ipi_send_lock, 0, __ATOMIC_RELEASE);
   return MMIX_IPI_OK;
 }
@@ -261,6 +268,7 @@ ipi_service(ipi_work_handler handler)
   uint64 work_acknowledged;
   uint64 work_classes;
   uint64 work_generation;
+  uint64 work_notification;
   int pending;
   int id = cpuid();
 
@@ -279,11 +287,14 @@ ipi_service(ipi_work_handler handler)
   if (work_classes != 0) {
     work_generation =
       __atomic_load_n(&target->work_generation, __ATOMIC_RELAXED);
+    work_notification =
+      __atomic_load_n(&target->work_notification, __ATOMIC_RELAXED);
     work_acknowledged =
       __atomic_load_n(&target->work_acknowledged, __ATOMIC_RELAXED);
-    if (work_generation == 0 || work_generation <= work_acknowledged)
+    if (work_generation == 0 || work_notification == 0 ||
+        work_generation <= work_acknowledged)
       return MMIX_IPI_BAD_STATE;
-    if (work_generation <= observed) {
+    if (work_notification <= observed) {
       if (handler == 0 ||
           handler(work_classes, work_generation) != MMIX_IPI_OK)
         return MMIX_IPI_BAD_STATE;

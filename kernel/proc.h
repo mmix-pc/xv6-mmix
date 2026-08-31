@@ -143,8 +143,17 @@ struct proc {
 };
 
 // MMIX address-space ownership shared by the process, VM, and trap modules.
+enum vm_invalidation_class {
+  VM_INVALIDATE_INSTRUCTION = 1 << 0,
+  VM_INVALIDATE_DATA = 1 << 1,
+  VM_INVALIDATE_ALL = VM_INVALIDATE_INSTRUCTION | VM_INVALIDATE_DATA,
+};
+
 void proc_vm_mutated(struct proc *p);
 void proc_vm_prepare_user(struct proc *p);
+void proc_vm_begin_mutation(struct proc *p);
+void proc_vm_commit_mutation(struct proc *p, uint64 va, uint64 classes);
+int proc_vm_ipi_work(uint64 classes, uint64 generation);
 
 #endif // !__ASSEMBLER__
 

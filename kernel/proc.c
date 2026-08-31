@@ -4,9 +4,11 @@
 #include "memlayout.h"
 #include "mmix.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "proc.h"
 #include "kcontext.h"
 #include "kalloc.h"
+#include "ipi.h"
 #include "vm.h"
 #include "defs.h"
 
@@ -52,6 +54,27 @@ static struct spinlock pid_lock;
 // Protects parent linkage and prevents a child exit from racing with wait.
 static struct spinlock wait_lock;
 static struct proc *initproc;
+
+enum {
+  VM_SHOOTDOWN_WAIT_LIMIT = 100000000,
+};
+
+struct vm_shootdown_state {
+  uint64 generation;
+  struct proc *process;
+  uint64 asn;
+  uint64 mutation_generation;
+  uint64 key;
+  uint64 classes;
+  uint64 targets;
+  uint64 acknowledged[NCPU];
+  uint64 result[NCPU];
+  uint64 completed;
+  uint64 active;
+};
+
+static struct sleeplock vm_shootdown_lock;
+static struct vm_shootdown_state vm_shootdown;
 
 enum {
   MMIX_VM_STATE_ASN_BITS = 10,
@@ -210,6 +233,169 @@ proc_vm_state(struct proc *p)
   return (p->vm_generation << MMIX_VM_STATE_ASN_BITS) | asn;
 }
 
+static int
+proc_vm_invalidation_valid(uint64 asn, uint64 key, uint64 classes)
+{
+  uint64 address = key & ~(PGSIZE - 1);
+
+  return asn >= MMIX_USER_ASN_FIRST && asn <= MMIX_USER_ASN_LAST &&
+         (key & (PGSIZE - 1)) == asn << 3 &&
+         (classes == VM_INVALIDATE_INSTRUCTION ||
+          classes == VM_INVALIDATE_DATA || classes == VM_INVALIDATE_ALL) &&
+         ((address >= MMIX_USER_IMAGE_BASE &&
+           address < MMIX_USER_SEGMENT0_LIMIT) ||
+          (address >= MMIX_USER_REGISTER_GUARD_BASE &&
+           address < MMIX_USER_REGISTER_GUARD_TOP));
+}
+
+static int
+proc_vm_invalidate_target(uint64 generation)
+{
+  struct proc *p;
+  uint64 active;
+  uint64 result;
+  int id = cpuid();
+
+  active = __atomic_load_n(&vm_shootdown.active, __ATOMIC_ACQUIRE);
+  if (generation == 0 || active != generation || id < 0 || id >= NCPU ||
+      (vm_shootdown.targets & (1ULL << id)) == 0 ||
+      !proc_vm_invalidation_valid(vm_shootdown.asn, vm_shootdown.key,
+                                  vm_shootdown.classes) ||
+      vm_shootdown.mutation_generation == 0 ||
+      __atomic_load_n(&vm_shootdown.acknowledged[id],
+                      __ATOMIC_RELAXED) != 0)
+    return -1;
+
+  p = vm_shootdown.process;
+  if (p == 0)
+    return -1;
+  mmix_sync_memory();
+  result = mmix_ldvts(vm_shootdown.key);
+  mmix_sync_translation();
+  if ((result & ~VM_INVALIDATE_ALL) != 0)
+    return -1;
+  __atomic_store_n(&vm_shootdown.result[id], result, __ATOMIC_RELAXED);
+  __atomic_store_n(&p->vm_cpu_generation[id],
+                   vm_shootdown.mutation_generation, __ATOMIC_RELEASE);
+  __atomic_store_n(&vm_shootdown.acknowledged[id], generation,
+                   __ATOMIC_RELEASE);
+  return 0;
+}
+
+int
+proc_vm_ipi_work(uint64 classes, uint64 generation)
+{
+  if (classes != MMIX_IPI_WORK_TRANSLATION)
+    return MMIX_IPI_BAD_ARGUMENT;
+  return proc_vm_invalidate_target(generation) == 0 ? MMIX_IPI_OK :
+                                                     MMIX_IPI_BAD_STATE;
+}
+
+void
+proc_vm_begin_mutation(struct proc *p)
+{
+  if (p == 0 || myproc() != p || !intr_get() || holding(&p->lock))
+    panic("vm mutation begin");
+  acquiresleep(&vm_shootdown_lock);
+  acquire(&p->lock);
+  if (p->state != RUNNING || p->vm_owner_cpu != cpuid() || p->pagetable == 0 ||
+      mmix_rv_read() != MMIX_KERNEL_RV)
+    panic("vm mutation owner");
+  proc_vm_tracking_valid_locked(p);
+}
+
+void
+proc_vm_commit_mutation(struct proc *p, uint64 va, uint64 classes)
+{
+  uint64 active_cpus;
+  uint64 asn;
+  uint64 generation;
+  uint64 local;
+  uint64 mutation_generation;
+  uint64 notification_generation;
+  uint64 remote;
+  uint64 targets;
+  int acknowledged;
+  int id = cpuid();
+
+  if (p == 0 || !holding(&p->lock) || !holdingsleep(&vm_shootdown_lock) ||
+      p->state != RUNNING || p->vm_owner_cpu != id || mycpu()->proc != p ||
+      p->pagetable == 0 || mmix_rv_read() != MMIX_KERNEL_RV ||
+      p->vm_generation == MMIX_VM_GENERATION_LIMIT ||
+      vm_shootdown.generation == ~0ULL)
+    panic("vm mutation commit");
+  proc_vm_tracking_valid_locked(p);
+  asn = MMIX_RV_N(p->pagetable->rv);
+  va = PGROUNDDOWN(va);
+  if (!proc_vm_invalidation_valid(asn, va | (asn << 3), classes))
+    panic("vm invalidation");
+
+  active_cpus = (1ULL << mmix_boot.info.cpu_count) - 1;
+  targets = __atomic_load_n(&p->vm_resident_cpus, __ATOMIC_RELAXED);
+  if ((targets & ~active_cpus) != 0)
+    panic("vm shootdown targets");
+  generation = vm_shootdown.generation + 1;
+  mutation_generation = p->vm_generation + 1;
+  memset(vm_shootdown.acknowledged, 0,
+         sizeof(vm_shootdown.acknowledged));
+  memset(vm_shootdown.result, 0, sizeof(vm_shootdown.result));
+  vm_shootdown.generation = generation;
+  vm_shootdown.process = p;
+  vm_shootdown.asn = asn;
+  vm_shootdown.mutation_generation = mutation_generation;
+  vm_shootdown.key = va | (asn << 3);
+  vm_shootdown.classes = classes;
+  vm_shootdown.targets = targets;
+  __atomic_store_n(&vm_shootdown.active, generation, __ATOMIC_RELEASE);
+
+  // A remote scheduler may be spinning on this process lock with interrupts
+  // masked. Keep this CPU non-preemptible, but release the lock before waiting
+  // for remote IPI service.
+  push_off();
+  release(&p->lock);
+
+  local = 1ULL << id;
+  if ((targets & local) != 0 && proc_vm_invalidate_target(generation) < 0)
+    panic("vm local shootdown");
+  remote = targets & ~local;
+  if (remote != 0 &&
+      ipi_send_work(remote, MMIX_IPI_WORK_TRANSLATION, generation,
+                    &notification_generation) != MMIX_IPI_OK)
+    panic("vm shootdown send");
+
+  for (uint64 spin = 0;; spin++) {
+    uint64 completed = 0;
+
+    for (uint32 target = 0; target < mmix_boot.info.cpu_count; target++) {
+      if ((remote & (1ULL << target)) == 0)
+        continue;
+      if (__atomic_load_n(&vm_shootdown.acknowledged[target],
+                          __ATOMIC_ACQUIRE) == generation &&
+          ipi_work_acknowledged(target, MMIX_IPI_WORK_TRANSLATION,
+                                generation, &acknowledged) == MMIX_IPI_OK &&
+          acknowledged)
+        completed |= 1ULL << target;
+    }
+    if (completed == remote)
+      break;
+    if (spin == VM_SHOOTDOWN_WAIT_LIMIT)
+      panic("vm shootdown timeout");
+    asm volatile("SWYM 0,0,0" : : : "memory");
+  }
+
+  acquire(&p->lock);
+  if (p->state != RUNNING || p->vm_owner_cpu != id || mycpu()->proc != p)
+    panic("vm mutation owner");
+  p->vm_generation = mutation_generation;
+  if ((targets & local) != 0)
+    mycpu()->user_translation = proc_vm_state(p);
+  __atomic_store_n(&vm_shootdown.completed, generation, __ATOMIC_RELEASE);
+  __atomic_store_n(&vm_shootdown.active, 0, __ATOMIC_RELEASE);
+  release(&p->lock);
+  pop_off();
+  releasesleep(&vm_shootdown_lock);
+}
+
 static void
 proc_vm_claim_locked(struct proc *p, struct cpu *c)
 {
@@ -363,6 +549,7 @@ procinit(void)
 
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+  initsleeplock(&vm_shootdown_lock, "VM shootdown");
   for (p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
     p->state = UNUSED;

@@ -499,6 +499,15 @@ mmix_sync_translation(void)
 }
 
 static inline uint64
+mmix_ldvts(uint64 key)
+{
+  uint64 result;
+
+  asm volatile("LDVTS %0,%1,0" : "=r"(result) : "r"(key) : "memory");
+  return result;
+}
+
+static inline uint64
 mmix_rk_read(void)
 {
   uint64 value;

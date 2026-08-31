@@ -146,7 +146,7 @@ trap_interrupt_dispatch(uint64 rq, uint64 restore_rk, uint64 rxx,
 
   if (mmix_rq_ipi_pending(rq, restore_rk) &&
       !mmix_rq_intc_pending(rq, restore_rk)) {
-    if (ipi_service(0) != MMIX_IPI_OK)
+    if (ipi_service(proc_vm_ipi_work) != MMIX_IPI_OK)
       return "IPI service";
     *serviced = MMIX_RQ_IPI;
     return 0;

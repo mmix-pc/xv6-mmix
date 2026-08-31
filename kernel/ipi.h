@@ -20,7 +20,8 @@ typedef int (*ipi_work_handler)(uint64 classes, uint64 generation);
 int ipi_validate(void);
 int ipi_init(void);
 int ipi_send(uint64 targets, uint64 *generation);
-int ipi_send_work(uint64 targets, uint64 classes, uint64 *generation);
+int ipi_send_work(uint64 targets, uint64 classes, uint64 work_generation,
+                  uint64 *notification_generation);
 int ipi_pending(int *pending);
 int ipi_service(ipi_work_handler handler);
 int ipi_acknowledged(uint32 target, uint64 generation, int *acknowledged);
