@@ -8,12 +8,22 @@
 
 extern pagetable_t kernel_pagetable;
 
+// Pages detached from a live page table but retained until shootdown completes.
+struct vm_reclaim {
+  void *pages;
+  uint64 count;
+};
+
 void kvminit(void);
 void kvminithart(void);
 pagetable_t uvmcreate(uint asn);
 uint64 uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz,
                 int permissions);
 uint64 uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz);
+uint64 uvmdealloc_deferred(pagetable_t pagetable, uint64 oldsz, uint64 newsz,
+                           struct vm_reclaim *reclaim);
+void uvmreclaim(struct vm_reclaim *reclaim);
+int uvmretire_local(pagetable_t pagetable, uint64 *result);
 uint64 vmfault(pagetable_t pagetable, uint64 va, int permissions);
 int uvmallocstacks(pagetable_t pagetable);
 int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz);

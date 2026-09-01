@@ -404,7 +404,12 @@ user_translation_trap(struct proc *p)
 
   if (permissions < 0)
     return 0;
+  // Complete the user-owned rQ handoff before allowing a lazy allocation to
+  // sleep while it serializes with another mapping mutation.
+  mmix_rq_write(trapframe->rq);
+  mmix_intr_mask_write(MMIX_KERNEL_TRAP_MASK);
   pte = vmfault(p->pagetable, trapframe->ryy, permissions);
+  mmix_intr_mask_write(0);
   if (pte == 0) {
     const char *cause = permissions == PTE_X ? "execute fault" :
                         permissions == PTE_R ? "read fault" :
@@ -416,9 +421,6 @@ user_translation_trap(struct proc *p)
   } else {
     trapframe->rzz = pte;
   }
-  // Forced translation entry performed GET rQ just like every other user
-  // entry, so complete that CPU-owned request handoff before returning.
-  mmix_rq_write(trapframe->rq);
   return 1;
 }
 

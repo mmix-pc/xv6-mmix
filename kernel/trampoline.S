@@ -194,6 +194,8 @@ mmix_user_trap_entry:
         PUT rZZ,r255
         LDOU r254,r253,MMIX_PROC_TRAPFRAME_TRANSLATION_R254_OFFSET
         LDOU r253,r253,MMIX_PROC_TRAPFRAME_TRANSLATION_R253_OFFSET
+        // RESUME 1 restores rK from $255; keep nested traps masked.
+        SETL r255,0
         RESUME 1
 
 .Ltranslation_miss:

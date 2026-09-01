@@ -49,34 +49,8 @@ sys_sbrk(void)
 
   if (t != SBRK_EAGER && t != SBRK_LAZY)
     return -1;
-  if (n == 0)
-    return addr;
-  if (t == SBRK_EAGER || n < 0) {
-    if (growproc(n) < 0)
-      return -1;
-  } else {
-    struct proc *p = myproc();
-
-    // Forced translation supplies the missing address to vmfault(); ordinary
-    // processes retain hardware walks and avoid needless translation traps.
-    if (p == 0)
-      return -1;
-    acquire(&p->lock);
-    if (p->state != RUNNING || p->vm_owner_cpu != cpuid() ||
-        p->pagetable == 0 || p->sz < MMIX_USER_IMAGE_BASE ||
-        (uint64)n > MMIX_USER_HEAP_LIMIT - p->sz) {
-      release(&p->lock);
-      return -1;
-    }
-    if (p->lazy_start == 0)
-      p->lazy_start = p->sz;
-    p->sz += (uint64)n;
-    p->pagetable->rv =
-      mmix_user_rv_set_function(p->pagetable->rv, MMIX_RV_F_SOFTWARE);
-    p->trapframe->user_rv = p->pagetable->rv;
-    proc_vm_mutated(p);
-    release(&p->lock);
-  }
+  if (n != 0 && growproc(n, t) < 0)
+    return -1;
   return addr;
 }
 

@@ -149,10 +149,11 @@ enum vm_invalidation_class {
   VM_INVALIDATE_ALL = VM_INVALIDATE_INSTRUCTION | VM_INVALIDATE_DATA,
 };
 
-void proc_vm_mutated(struct proc *p);
 void proc_vm_prepare_user(struct proc *p);
 void proc_vm_begin_mutation(struct proc *p);
-void proc_vm_commit_mutation(struct proc *p, uint64 va, uint64 classes);
+void proc_vm_cancel_mutation(struct proc *p);
+void proc_vm_commit_mutation(struct proc *p, uint64 start, uint64 end,
+                             uint64 classes);
 int proc_vm_ipi_work(uint64 classes, uint64 generation);
 
 #endif // !__ASSEMBLER__

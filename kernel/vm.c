@@ -309,7 +309,8 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 }
 
 static int
-mmix_unmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
+mmix_unmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free,
+           struct vm_reclaim *reclaim)
 {
   uint64 size;
   int changed = 0;
@@ -345,15 +346,26 @@ mmix_unmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       return -1;
     }
     if (do_free) {
-      uint64 pa = mmix_pte_pa(*leaf);
-      if (!kalloc_page_is_managed((void *)pa)) {
+      void *page = (void *)mmix_pte_pa(*leaf);
+
+      if (!kalloc_page_is_managed(page)) {
         if (changed)
           mmix_pagetable_sync(pagetable);
         return -1;
       }
-      kfree((void *)pa);
+      *leaf = 0;
+      if (reclaim != 0) {
+        if (reclaim->count == ~0ULL)
+          panic("unmap reclaim count");
+        *(void **)page = reclaim->pages;
+        reclaim->pages = page;
+        reclaim->count++;
+      } else {
+        kfree(page);
+      }
+    } else {
+      *leaf = 0;
     }
-    *leaf = 0;
     changed = 1;
   }
 
@@ -365,7 +377,7 @@ mmix_unmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 void
 uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
-  if (mmix_unmap(pagetable, va, npages, do_free) < 0)
+  if (mmix_unmap(pagetable, va, npages, do_free, 0) < 0)
     panic("uvmunmap");
 }
 
@@ -389,6 +401,69 @@ free_table(pagetable_t pagetable, uint64 table_pa, uint level)
     kfree((void *)child_pa);
   }
   return 0;
+}
+
+static int
+retire_table(pagetable_t pagetable, uint64 table_pa, uint level, uint64 base,
+             uint64 asn, uint64 *result)
+{
+  pte_t *table = table_address(table_pa);
+  uint64 span = PGSIZE;
+
+  for (uint current = 0; current < level; current++)
+    span *= MMIX_PT_ENTRIES;
+  for (uint index = 0; index < MMIX_PT_ENTRIES; index++) {
+    pte_t entry = table[index];
+
+    if (entry == 0)
+      continue;
+    if (level == 0) {
+      if (!leaf_valid(pagetable, entry))
+        return -1;
+      *result |= mmix_ldvts((base + (uint64)index * PGSIZE) | (asn << 3));
+      continue;
+    }
+    if (!ptp_valid(pagetable, entry) ||
+        retire_table(pagetable, mmix_ptp_child_pa(entry), level - 1,
+                     base + (uint64)index * span, asn, result) < 0)
+      return -1;
+  }
+  return 0;
+}
+
+// Invalidate every mapped leaf of one user address space on this CPU. The
+// caller keeps the page-table tree stable until all target CPUs complete.
+int
+uvmretire_local(pagetable_t pagetable, uint64 *result)
+{
+  uint64 root_pa;
+  uint64 asn;
+
+  if (!user_pagetable(pagetable) || result == 0)
+    return -1;
+  root_pa = MMIX_RV_ROOT_PA(pagetable->rv);
+  asn = MMIX_RV_N(pagetable->rv);
+  *result = 0;
+  for (uint root = 0; root < MMIX_USER_ROOT_BLOCKS; root++) {
+    int found = 0;
+
+    for (uint segment = 0; segment < 4; segment++) {
+      uint start;
+      uint end;
+
+      segment_bounds(pagetable->rv, segment, &start, &end);
+      if (root < start || root >= end)
+        continue;
+      if (retire_table(pagetable, root_pa + (uint64)root * PGSIZE,
+                       root - start, (uint64)segment << 61, asn, result) < 0)
+        return -1;
+      found = 1;
+      break;
+    }
+    if (!found)
+      return -1;
+  }
+  return (*result & ~VM_INVALIDATE_ALL) == 0 ? 0 : -1;
 }
 
 static int
@@ -495,13 +570,14 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int permissions)
   return newsz;
 
 fail:
-  if (mapped != 0 && mmix_unmap(pagetable, first, mapped, 1) < 0)
+  if (mapped != 0 && mmix_unmap(pagetable, first, mapped, 1, 0) < 0)
     panic("uvmalloc rollback");
   return 0;
 }
 
-uint64
-uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
+static uint64
+uvmdealloc_internal(pagetable_t pagetable, uint64 oldsz, uint64 newsz,
+                    struct vm_reclaim *reclaim)
 {
   uint64 first;
   uint64 last;
@@ -516,9 +592,45 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
     first = MMIX_USER_IMAGE_BASE;
   last = PGROUNDUP(oldsz);
   if (last > first && mmix_unmap(pagetable, first,
-                                  (last - first) / PGSIZE, 1) < 0)
+                                 (last - first) / PGSIZE, 1, reclaim) < 0)
     panic("uvmdealloc");
   return newsz;
+}
+
+uint64
+uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
+{
+  return uvmdealloc_internal(pagetable, oldsz, newsz, 0);
+}
+
+uint64
+uvmdealloc_deferred(pagetable_t pagetable, uint64 oldsz, uint64 newsz,
+                    struct vm_reclaim *reclaim)
+{
+  if (reclaim == 0 || reclaim->pages != 0 || reclaim->count != 0)
+    panic("uvmdealloc deferred");
+  return uvmdealloc_internal(pagetable, oldsz, newsz, reclaim);
+}
+
+void
+uvmreclaim(struct vm_reclaim *reclaim)
+{
+  uint64 count = 0;
+
+  if (reclaim == 0)
+    panic("uvmreclaim");
+  while (reclaim->pages != 0) {
+    void *page = reclaim->pages;
+
+    if (count >= reclaim->count || !kalloc_page_is_managed(page))
+      panic("uvmreclaim page");
+    reclaim->pages = *(void **)page;
+    kfree(page);
+    count++;
+  }
+  if (count != reclaim->count)
+    panic("uvmreclaim count");
+  reclaim->count = 0;
 }
 
 // Resolve a software-translation miss. Existing mappings are returned when
@@ -534,9 +646,9 @@ vmfault(pagetable_t pagetable, uint64 va, int permissions)
   int status;
   void *page;
 
-  if (p == 0)
+  if (p == 0 || pagetable == 0 || pagetable != p->pagetable || !intr_get())
     return 0;
-  acquire(&p->lock);
+  proc_vm_begin_mutation(p);
   if (p->state != RUNNING || p->vm_owner_cpu != cpuid() || pagetable == 0 ||
       pagetable != p->pagetable ||
       MMIX_RV_F(pagetable->rv) != MMIX_RV_F_SOFTWARE ||
@@ -551,7 +663,7 @@ vmfault(pagetable_t pagetable, uint64 va, int permissions)
            (uint64)permissions))
       goto fail;
     result = *leaf;
-    release(&p->lock);
+    proc_vm_cancel_mutation(p);
     return result;
   }
   if ((status != WALK_ABSENT && status != WALK_OK) ||
@@ -572,13 +684,13 @@ vmfault(pagetable_t pagetable, uint64 va, int permissions)
   leaf = walk(pagetable, page_va, 0);
   if (leaf == 0 || !leaf_valid(pagetable, *leaf))
     panic("vmfault mapping");
-  proc_vm_mutated(p);
   result = *leaf;
-  release(&p->lock);
+  proc_vm_commit_mutation(p, page_va, page_va + PGSIZE,
+                          VM_INVALIDATE_DATA);
   return result;
 
 fail:
-  release(&p->lock);
+  proc_vm_cancel_mutation(p);
   return 0;
 }
 
@@ -602,7 +714,7 @@ uvmalloc_range(pagetable_t pagetable, uint64 start, uint64 end)
   if (current == end)
     return 0;
   if (current > start &&
-      mmix_unmap(pagetable, start, (current - start) / PGSIZE, 1) < 0)
+      mmix_unmap(pagetable, start, (current - start) / PGSIZE, 1, 0) < 0)
     panic("uvmalloc_range");
   return -1;
 }
@@ -617,7 +729,7 @@ uvmallocstacks(pagetable_t pagetable)
   if (uvmalloc_range(pagetable, MMIX_USER_REGISTER_STACK_BASE,
                      MMIX_USER_REGISTER_STACK_TOP) < 0) {
     if (mmix_unmap(pagetable, MMIX_USER_STACK_BASE, MMIX_USER_STACK_PAGES,
-                   1) < 0)
+                   1, 0) < 0)
       panic("uvmallocstacks");
     return -1;
   }
@@ -633,7 +745,7 @@ uvmclear(pagetable_t pagetable, uint64 va)
   if (!user_pagetable(pagetable) ||
       walk_leaf(pagetable, page, 0, &leaf) != WALK_OK ||
       !leaf_valid(pagetable, *leaf) ||
-      mmix_unmap(pagetable, page, 1, 1) < 0)
+      mmix_unmap(pagetable, page, 1, 1, 0) < 0)
     panic("uvmclear");
 }
 
@@ -667,7 +779,7 @@ static void
 uvmremove_range(pagetable_t pagetable, uint64 start, uint64 end)
 {
   if (end > start &&
-      mmix_unmap(pagetable, start, (end - start) / PGSIZE, 1) < 0)
+      mmix_unmap(pagetable, start, (end - start) / PGSIZE, 1, 0) < 0)
     panic("uvmremove_range");
 }
 

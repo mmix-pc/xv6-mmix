@@ -57,14 +57,19 @@ static struct proc *initproc;
 
 enum {
   VM_SHOOTDOWN_WAIT_LIMIT = 100000000,
+  VM_SHOOTDOWN_RANGE = 1,
+  VM_SHOOTDOWN_RETIRE = 2,
 };
 
 struct vm_shootdown_state {
   uint64 generation;
   struct proc *process;
+  pagetable_t pagetable;
   uint64 asn;
   uint64 mutation_generation;
-  uint64 key;
+  uint64 operation;
+  uint64 start;
+  uint64 end;
   uint64 classes;
   uint64 targets;
   uint64 acknowledged[NCPU];
@@ -152,6 +157,7 @@ proc_slot_clean(struct proc *p)
 {
   return p->chan == 0 && p->killed == 0 && p->xstate == 0 && p->pid == 0 &&
          p->vm_owner_cpu == -1 && p->resume_cpu == -1 &&
+         p->vm_resident_cpus == 0 &&
          p->name[0] == 0 && p->context.state == 0 &&
          proc_user_state_empty(p);
 }
@@ -159,8 +165,8 @@ proc_slot_clean(struct proc *p)
 static void
 proc_clear(struct proc *p, int clear_context)
 {
-  // Preserve translation generations and residency across slot release so a
-  // reused ASN remains distinguishable until its old translations retire.
+  // Preserve translation generations across slot release so a reused ASN
+  // remains distinguishable. Residency must already have been retired.
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
@@ -234,18 +240,17 @@ proc_vm_state(struct proc *p)
 }
 
 static int
-proc_vm_invalidation_valid(uint64 asn, uint64 key, uint64 classes)
+proc_vm_invalidation_valid(uint64 asn, uint64 start, uint64 end,
+                           uint64 classes)
 {
-  uint64 address = key & ~(PGSIZE - 1);
-
   return asn >= MMIX_USER_ASN_FIRST && asn <= MMIX_USER_ASN_LAST &&
-         (key & (PGSIZE - 1)) == asn << 3 &&
+         start < end && (start & (PGSIZE - 1)) == 0 &&
+         (end & (PGSIZE - 1)) == 0 &&
          (classes == VM_INVALIDATE_INSTRUCTION ||
           classes == VM_INVALIDATE_DATA || classes == VM_INVALIDATE_ALL) &&
-         ((address >= MMIX_USER_IMAGE_BASE &&
-           address < MMIX_USER_SEGMENT0_LIMIT) ||
-          (address >= MMIX_USER_REGISTER_GUARD_BASE &&
-           address < MMIX_USER_REGISTER_GUARD_TOP));
+         ((start >= MMIX_USER_IMAGE_BASE && end <= MMIX_USER_SEGMENT0_LIMIT) ||
+          (start >= MMIX_USER_REGISTER_GUARD_BASE &&
+           end <= MMIX_USER_REGISTER_GUARD_TOP));
 }
 
 static int
@@ -254,14 +259,24 @@ proc_vm_invalidate_target(uint64 generation)
   struct proc *p;
   uint64 active;
   uint64 result;
+  uint64 va;
   int id = cpuid();
 
   active = __atomic_load_n(&vm_shootdown.active, __ATOMIC_ACQUIRE);
   if (generation == 0 || active != generation || id < 0 || id >= NCPU ||
       (vm_shootdown.targets & (1ULL << id)) == 0 ||
-      !proc_vm_invalidation_valid(vm_shootdown.asn, vm_shootdown.key,
-                                  vm_shootdown.classes) ||
+      vm_shootdown.pagetable == 0 ||
+      MMIX_RV_N(vm_shootdown.pagetable->rv) != vm_shootdown.asn ||
       vm_shootdown.mutation_generation == 0 ||
+      (vm_shootdown.operation != VM_SHOOTDOWN_RANGE &&
+       vm_shootdown.operation != VM_SHOOTDOWN_RETIRE) ||
+      (vm_shootdown.operation == VM_SHOOTDOWN_RANGE &&
+       !proc_vm_invalidation_valid(vm_shootdown.asn, vm_shootdown.start,
+                                   vm_shootdown.end,
+                                   vm_shootdown.classes)) ||
+      (vm_shootdown.operation == VM_SHOOTDOWN_RETIRE &&
+       (vm_shootdown.start != 0 || vm_shootdown.end != 0 ||
+        vm_shootdown.classes != VM_INVALIDATE_ALL)) ||
       __atomic_load_n(&vm_shootdown.acknowledged[id],
                       __ATOMIC_RELAXED) != 0)
     return -1;
@@ -270,13 +285,18 @@ proc_vm_invalidate_target(uint64 generation)
   if (p == 0)
     return -1;
   mmix_sync_memory();
-  result = mmix_ldvts(vm_shootdown.key);
+  result = 0;
+  if (vm_shootdown.operation == VM_SHOOTDOWN_RETIRE) {
+    if (uvmretire_local(vm_shootdown.pagetable, &result) < 0)
+      return -1;
+  } else {
+    for (va = vm_shootdown.start; va < vm_shootdown.end; va += PGSIZE)
+      result |= mmix_ldvts(va | (vm_shootdown.asn << 3));
+  }
   mmix_sync_translation();
   if ((result & ~VM_INVALIDATE_ALL) != 0)
     return -1;
   __atomic_store_n(&vm_shootdown.result[id], result, __ATOMIC_RELAXED);
-  __atomic_store_n(&p->vm_cpu_generation[id],
-                   vm_shootdown.mutation_generation, __ATOMIC_RELEASE);
   __atomic_store_n(&vm_shootdown.acknowledged[id], generation,
                    __ATOMIC_RELEASE);
   return 0;
@@ -305,7 +325,20 @@ proc_vm_begin_mutation(struct proc *p)
 }
 
 void
-proc_vm_commit_mutation(struct proc *p, uint64 va, uint64 classes)
+proc_vm_cancel_mutation(struct proc *p)
+{
+  if (p == 0 || !holding(&p->lock) || !holdingsleep(&vm_shootdown_lock) ||
+      p->state != RUNNING || p->vm_owner_cpu != cpuid() || mycpu()->proc != p ||
+      p->pagetable == 0 || mmix_rv_read() != MMIX_KERNEL_RV)
+    panic("vm mutation cancel");
+  proc_vm_tracking_valid_locked(p);
+  release(&p->lock);
+  releasesleep(&vm_shootdown_lock);
+}
+
+static void
+proc_vm_commit_locked(struct proc *p, uint64 operation, uint64 start,
+                      uint64 end, uint64 classes)
 {
   uint64 active_cpus;
   uint64 asn;
@@ -326,8 +359,12 @@ proc_vm_commit_mutation(struct proc *p, uint64 va, uint64 classes)
     panic("vm mutation commit");
   proc_vm_tracking_valid_locked(p);
   asn = MMIX_RV_N(p->pagetable->rv);
-  va = PGROUNDDOWN(va);
-  if (!proc_vm_invalidation_valid(asn, va | (asn << 3), classes))
+  if ((operation != VM_SHOOTDOWN_RANGE &&
+       operation != VM_SHOOTDOWN_RETIRE) ||
+      (operation == VM_SHOOTDOWN_RANGE &&
+       !proc_vm_invalidation_valid(asn, start, end, classes)) ||
+      (operation == VM_SHOOTDOWN_RETIRE &&
+       (start != 0 || end != 0 || classes != VM_INVALIDATE_ALL)))
     panic("vm invalidation");
 
   active_cpus = (1ULL << mmix_boot.info.cpu_count) - 1;
@@ -341,9 +378,12 @@ proc_vm_commit_mutation(struct proc *p, uint64 va, uint64 classes)
   memset(vm_shootdown.result, 0, sizeof(vm_shootdown.result));
   vm_shootdown.generation = generation;
   vm_shootdown.process = p;
+  vm_shootdown.pagetable = p->pagetable;
   vm_shootdown.asn = asn;
   vm_shootdown.mutation_generation = mutation_generation;
-  vm_shootdown.key = va | (asn << 3);
+  vm_shootdown.operation = operation;
+  vm_shootdown.start = start;
+  vm_shootdown.end = end;
   vm_shootdown.classes = classes;
   vm_shootdown.targets = targets;
   __atomic_store_n(&vm_shootdown.active, generation, __ATOMIC_RELEASE);
@@ -388,12 +428,56 @@ proc_vm_commit_mutation(struct proc *p, uint64 va, uint64 classes)
     panic("vm mutation owner");
   p->vm_generation = mutation_generation;
   if ((targets & local) != 0)
+    p->vm_cpu_generation[id] = mutation_generation;
+  if (operation == VM_SHOOTDOWN_RETIRE) {
+    p->vm_resident_cpus = 0;
+    if ((targets & local) != 0)
+      mycpu()->user_translation = proc_vm_state(p);
+  } else if ((targets & local) != 0) {
     mycpu()->user_translation = proc_vm_state(p);
+  }
   __atomic_store_n(&vm_shootdown.completed, generation, __ATOMIC_RELEASE);
   __atomic_store_n(&vm_shootdown.active, 0, __ATOMIC_RELEASE);
   release(&p->lock);
   pop_off();
   releasesleep(&vm_shootdown_lock);
+}
+
+void
+proc_vm_commit_mutation(struct proc *p, uint64 start, uint64 end,
+                        uint64 classes)
+{
+  start = PGROUNDDOWN(start);
+  if (end > ~(uint64)0 - (PGSIZE - 1))
+    panic("vm invalidation");
+  end = PGROUNDUP(end);
+  proc_vm_commit_locked(p, VM_SHOOTDOWN_RANGE, start, end, classes);
+}
+
+static void
+proc_vm_retire(struct proc *p)
+{
+  uint64 residents;
+
+  if (p == 0 || myproc() != p || holding(&p->lock))
+    panic("vm retire");
+  acquire(&p->lock);
+  if (p->state != RUNNING || p->vm_owner_cpu != cpuid() ||
+      p->pagetable == 0 || mmix_rv_read() != MMIX_KERNEL_RV)
+    panic("vm retire owner");
+  proc_vm_tracking_valid_locked(p);
+  residents = p->vm_resident_cpus;
+  if (residents == 0) {
+    proc_vm_advance_locked(p);
+    release(&p->lock);
+    return;
+  }
+  release(&p->lock);
+  if (!intr_get())
+    panic("vm retire interrupt");
+  proc_vm_begin_mutation(p);
+  proc_vm_commit_locked(p, VM_SHOOTDOWN_RETIRE, 0, 0,
+                        VM_INVALIDATE_ALL);
 }
 
 static void
@@ -431,7 +515,7 @@ proc_vm_release_locked(struct proc *p, struct cpu *c)
   p->vm_owner_cpu = -1;
 }
 
-void
+static void
 proc_vm_mutated(struct proc *p)
 {
   struct cpu *c = mycpu();
@@ -587,7 +671,8 @@ static void
 proc_user_free(struct proc *p)
 {
   if (p == 0 || !holding(&p->lock) ||
-      (p->state != USED && p->state != ZOMBIE) || p->vm_owner_cpu != -1)
+      (p->state != USED && p->state != ZOMBIE) || p->vm_owner_cpu != -1 ||
+      p->vm_resident_cpus != 0)
     panic("proc user free");
   if (p->pagetable != 0) {
     proc_freepagetable(p->pagetable, p->sz);
@@ -705,6 +790,7 @@ proc_exec(pagetable_t pagetable, uint64 sz, uint64 entry, uint64 stack,
 
   oldpagetable = p->pagetable;
   oldsz = p->sz;
+  proc_vm_retire(p);
   acquire(&p->lock);
   if (p->state != RUNNING || p->vm_owner_cpu != cpuid() ||
       p->pagetable != oldpagetable) {
@@ -875,14 +961,18 @@ kfork(void)
 }
 
 static int
-proc_user_grow(struct proc *p, int n)
+proc_user_grow(struct proc *p, int n, int type)
 {
+  struct vm_reclaim reclaim = {0};
+  uint64 invalidation_end = 0;
+  uint64 invalidation_start = 0;
   uint64 oldsz;
   uint64 newsz;
+  int changed = 0;
 
-  if (p == 0)
+  if (p == 0 || (type != SBRK_EAGER && type != SBRK_LAZY))
     return -1;
-  acquire(&p->lock);
+  proc_vm_begin_mutation(p);
   if (p->state != RUNNING || p->vm_owner_cpu != cpuid() ||
       p->pagetable == 0 || p->trapframe == 0 ||
       p->sz < MMIX_USER_IMAGE_BASE)
@@ -892,14 +982,33 @@ proc_user_grow(struct proc *p, int n)
     if ((uint64)n > MMIX_USER_HEAP_LIMIT - oldsz)
       goto fail;
     newsz = oldsz + (uint64)n;
-    if (uvmalloc(p->pagetable, oldsz, newsz, PTE_W) == 0)
-      goto fail;
+    if (type == SBRK_EAGER) {
+      if (uvmalloc(p->pagetable, oldsz, newsz, PTE_W) == 0)
+        goto fail;
+    } else {
+      // Missing heap pages are resolved by forced translation after return.
+      if (p->lazy_start == 0)
+        p->lazy_start = oldsz;
+      p->pagetable->rv =
+        mmix_user_rv_set_function(p->pagetable->rv, MMIX_RV_F_SOFTWARE);
+      p->trapframe->user_rv = p->pagetable->rv;
+    }
+    invalidation_start = PGROUNDUP(oldsz);
+    if (invalidation_start < MMIX_USER_IMAGE_BASE)
+      invalidation_start = MMIX_USER_IMAGE_BASE;
+    invalidation_end = PGROUNDUP(newsz);
+    changed = invalidation_end > invalidation_start;
   } else if (n < 0) {
     // Match xv6: an unsigned underflow is a successful no-op in uvmdealloc().
     newsz = oldsz + (long)n;
     if (newsz < MMIX_USER_IMAGE_BASE)
       goto fail;
-    newsz = uvmdealloc(p->pagetable, oldsz, newsz);
+    invalidation_start = PGROUNDUP(newsz);
+    if (invalidation_start < MMIX_USER_IMAGE_BASE)
+      invalidation_start = MMIX_USER_IMAGE_BASE;
+    invalidation_end = PGROUNDUP(oldsz);
+    newsz = uvmdealloc_deferred(p->pagetable, oldsz, newsz, &reclaim);
+    changed = reclaim.count != 0;
     if (p->lazy_start != 0 && newsz <= p->lazy_start) {
       // No sparse interval remains, so hardware walks are sufficient again.
       p->lazy_start = 0;
@@ -908,23 +1017,28 @@ proc_user_grow(struct proc *p, int n)
       p->trapframe->user_rv = p->pagetable->rv;
     }
   } else {
-    release(&p->lock);
+    proc_vm_cancel_mutation(p);
     return 0;
   }
   p->sz = newsz;
-  proc_vm_mutated(p);
-  release(&p->lock);
+  if (changed)
+    proc_vm_commit_mutation(p, invalidation_start, invalidation_end,
+                            VM_INVALIDATE_DATA);
+  else
+    proc_vm_cancel_mutation(p);
+  // A completed shootdown makes the detached pages safe for allocator reuse.
+  uvmreclaim(&reclaim);
   return 0;
 
 fail:
-  release(&p->lock);
+  proc_vm_cancel_mutation(p);
   return -1;
 }
 
 int
-growproc(int n)
+growproc(int n, int type)
 {
-  return proc_user_grow(myproc(), n);
+  return proc_user_grow(myproc(), n, type);
 }
 
 int
@@ -1103,6 +1217,7 @@ void
 kexit(int status)
 {
   struct proc *p = myproc();
+  int restore_interrupts;
 
   if (p == 0)
     panic("exit proc");
@@ -1122,6 +1237,13 @@ kexit(int status)
     end_op();
     p->cwd = 0;
   }
+
+  restore_interrupts = !intr_get();
+  if (restore_interrupts)
+    mmix_intr_mask_write(MMIX_KERNEL_TRAP_MASK);
+  proc_vm_retire(p);
+  if (restore_interrupts)
+    mmix_intr_mask_write(0);
 
   acquire(&wait_lock);
   reparent(p);
