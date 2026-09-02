@@ -3162,21 +3162,71 @@ run(void f(char *), char *s)
 }
 
 int
-runtests(struct test *tests, char *justone, int continuous)
+runtests(struct test *tests, int continuous)
 {
   int ntests = 0;
   for (struct test *t = tests; t->s != 0; t++) {
-    if ((justone == 0) || strcmp(t->s, justone) == 0) {
-      ntests++;
-      if (!run(t->f, t->s)) {
-        if (continuous != 2) {
-          printf("SOME TESTS FAILED\n");
-          return -1;
-        }
+    ntests++;
+    if (!run(t->f, t->s)) {
+      if (continuous != 2) {
+        printf("SOME TESTS FAILED\n");
+        return -1;
       }
     }
   }
   return ntests;
+}
+
+struct test *
+findtest(char *name, int quick)
+{
+  for (struct test *t = quicktests; t->s != 0; t++) {
+    if (strcmp(t->s, name) == 0)
+      return t;
+  }
+  if (!quick) {
+    for (struct test *t = slowtests; t->s != 0; t++) {
+      if (strcmp(t->s, name) == 0)
+        return t;
+    }
+  }
+  return 0;
+}
+
+int
+validatetestnames(char **names, int nnames, int quick)
+{
+  for (int i = 0; i < nnames; i++) {
+    if (findtest(names[i], quick) == 0) {
+      printf("unknown test: %s\n", names[i]);
+      return -1;
+    }
+    for (int j = 0; j < i; j++) {
+      if (strcmp(names[i], names[j]) == 0) {
+        printf("duplicate test: %s\n", names[i]);
+        return -1;
+      }
+    }
+  }
+  return 0;
+}
+
+int
+runnamedtests(char **names, int nnames)
+{
+  int failed = 0;
+
+  for (int i = 0; i < nnames; i++) {
+    struct test *t = findtest(names[i], 0);
+
+    if (t == 0 || !run(t->f, t->s))
+      failed = 1;
+  }
+  if (failed) {
+    printf("SOME TESTS FAILED\n");
+    return -1;
+  }
+  return nnames;
 }
 
 // use sbrk() to count how many free physical memory pages there are.
@@ -3197,26 +3247,31 @@ countfree()
 }
 
 int
-drivetests(int quick, int continuous, char *justone)
+drivetests(int quick, int continuous, char **testnames, int ntestnames)
 {
   do {
     printf("usertests starting\n");
+    // A named group shares these scans, which are costly with large RAM.
     int free0 = countfree();
     int free1 = 0;
     int ntests = 0;
     int n;
-    n = runtests(quicktests, justone, continuous);
+    if (ntestnames != 0)
+      n = runnamedtests(testnames, ntestnames);
+    else
+      n = runtests(quicktests, continuous);
     if (n < 0) {
       if (continuous != 2) {
-        return 1;
+        if (ntestnames == 0)
+          return 1;
+        ntests = -1;
       }
     } else {
       ntests += n;
     }
-    if (!quick) {
-      if (justone == 0)
-        printf("usertests slow tests starting\n");
-      n = runtests(slowtests, justone, continuous);
+    if (ntestnames == 0 && !quick && ntests >= 0) {
+      printf("usertests slow tests starting\n");
+      n = runtests(slowtests, continuous);
       if (n < 0) {
         if (continuous != 2) {
           return 1;
@@ -3231,10 +3286,8 @@ drivetests(int quick, int continuous, char *justone)
         return 1;
       }
     }
-    if (justone != 0 && ntests == 0) {
-      printf("NO TESTS EXECUTED\n");
+    if (ntests < 0)
       return 1;
-    }
   } while (continuous);
   return 0;
 }
@@ -3244,21 +3297,31 @@ main(int argc, char *argv[])
 {
   int continuous = 0;
   int quick = 0;
-  char *justone = 0;
+  int firsttest = 1;
 
-  if (argc == 2 && strcmp(argv[1], "-q") == 0) {
+  if (argc > 1 && strcmp(argv[1], "-q") == 0) {
     quick = 1;
-  } else if (argc == 2 && strcmp(argv[1], "-c") == 0) {
+    firsttest++;
+  } else if (argc > 1 && strcmp(argv[1], "-c") == 0) {
     continuous = 1;
-  } else if (argc == 2 && strcmp(argv[1], "-C") == 0) {
+    firsttest++;
+  } else if (argc > 1 && strcmp(argv[1], "-C") == 0) {
     continuous = 2;
-  } else if (argc == 2 && argv[1][0] != '-') {
-    justone = argv[1];
-  } else if (argc > 1) {
-    printf("Usage: usertests [-c] [-C] [-q] [testname]\n");
+    firsttest++;
+  }
+  for (int i = firsttest; i < argc; i++) {
+    if (argv[i][0] == '-') {
+      printf("Usage: usertests [-c|-C|-q] [testname ...]\n");
+      exit(1);
+    }
+  }
+  char **testnames = argv + firsttest;
+  int ntestnames = argc - firsttest;
+  if (validatetestnames(testnames, ntestnames, quick) < 0) {
+    printf("Usage: usertests [-c|-C|-q] [testname ...]\n");
     exit(1);
   }
-  if (drivetests(quick, continuous, justone)) {
+  if (drivetests(quick, continuous, testnames, ntestnames)) {
     exit(1);
   }
   printf("ALL TESTS PASSED\n");
