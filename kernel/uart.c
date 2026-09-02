@@ -1,7 +1,6 @@
 #include "types.h"
 #include "param.h"
 #include "memlayout.h"
-#include "early_uart.h"
 #include "spinlock.h"
 #include "cpu.h"
 #include "proc.h"
@@ -44,6 +43,8 @@ static int tx_busy;
 static int tx_chan;
 static int runtime_initialized;
 static int runtime_enabled;
+static uint32 output_owner;
+static uint32 panic_owner;
 
 static __attribute__((always_inline)) inline uint8
 uart_read(uint64 offset)
@@ -75,13 +76,41 @@ early_uart_init(void)
   uart_write(UART_IER, 0);
 }
 
-void
+static void
 early_uart_putc(int c)
 {
   while ((uart_read(UART_LSR) & UART_LSR_THR_EMPTY) == 0)
     ;
 
   uart_write(UART_THR, (uint8)c);
+}
+
+// Serialize every normal THR writer, including synchronous diagnostics and
+// echo, without making the panic path depend on an xv6 lock.
+static void
+uart_output_enter(void)
+{
+  uint32 current = (uint32)cpuid() + 1;
+  uint32 expected;
+
+  for (;;) {
+    if (__atomic_load_n(&panic_owner, __ATOMIC_ACQUIRE) != 0)
+      for (;;)
+        ;
+    expected = 0;
+    if (__atomic_compare_exchange_n(&output_owner, &expected, current, 0,
+                                    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+      if (__atomic_load_n(&panic_owner, __ATOMIC_ACQUIRE) == 0)
+        return;
+      __atomic_store_n(&output_owner, 0, __ATOMIC_RELEASE);
+    }
+  }
+}
+
+static void
+uart_output_leave(void)
+{
+  __atomic_store_n(&output_owner, 0, __ATOMIC_RELEASE);
 }
 
 // Adopt the UART state established by early_uart_init(). Interrupts stay
@@ -100,7 +129,7 @@ uartinit(void)
 
   uart_write(UART_IER, 0);
   initlock(&tx_lock, "uart");
-  tx_busy = 0;
+  __atomic_store_n(&tx_busy, 0, __ATOMIC_RELAXED);
   runtime_initialized = 1;
 }
 
@@ -110,6 +139,25 @@ uartgetc(void)
   if ((uart_read(UART_LSR) & UART_LSR_RX_READY) == 0)
     return -1;
   return uart_read(UART_THR);
+}
+
+static void __attribute__((noreturn))
+uart_fail(char *message)
+{
+  uint32 enabled = 0;
+  uint32 owner = ~0U;
+  int enabled_status = intc_enabled(&enabled);
+  int owner_status = intc_shared_owner(UART0_IRQ, &owner);
+
+  printk("uart failure: cpu=%d owner=%u/%d enabled=0x%x/%d "
+         "ier=0x%x iir=0x%x lsr=0x%x tx=%d output-owner=%u\n",
+         cpuid(), owner, owner_status, enabled, enabled_status,
+         (unsigned int)uart_read(UART_IER),
+         (unsigned int)uart_read(UART_IIR),
+         (unsigned int)uart_read(UART_LSR),
+         __atomic_load_n(&tx_busy, __ATOMIC_RELAXED),
+         __atomic_load_n(&output_owner, __ATOMIC_RELAXED));
+  panic(message);
 }
 
 // Complete the one-way handoff from early polling to the runtime console.
@@ -127,14 +175,14 @@ uartenable(void)
       owner != (uint32)cpuid() ||
       intc_enabled(&enabled) != MMIX_INTC_OK ||
       (enabled & (1U << UART0_IRQ)) == 0)
-    panic("uart affinity");
+    uart_fail("uart affinity");
 
   while ((c = uartgetc()) >= 0)
     consoleintr(c);
   (void)uart_read(UART_IIR);
   uart_write(UART_IER, UART_IER_RX_ENABLE | UART_IER_TX_ENABLE);
   if (uart_read(UART_IER) != (UART_IER_RX_ENABLE | UART_IER_TX_ENABLE))
-    panic("uart irq state");
+    uart_fail("uart irq state");
   runtime_enabled = 1;
 }
 
@@ -147,10 +195,12 @@ uartwrite(char buf[], int n)
     panic("uart write");
   acquire(&tx_lock);
   while (i < n) {
-    while (tx_busy)
+    while (__atomic_load_n(&tx_busy, __ATOMIC_RELAXED))
       sleep(&tx_chan, &tx_lock);
+    uart_output_enter();
     uart_write(UART_THR, (uint8)buf[i++]);
-    tx_busy = 1;
+    uart_output_leave();
+    __atomic_store_n(&tx_busy, 1, __ATOMIC_RELAXED);
   }
   release(&tx_lock);
 }
@@ -158,23 +208,53 @@ uartwrite(char buf[], int n)
 void
 uartputc_sync(int c)
 {
-  if (!panicking)
-    push_off();
-  if (panicked)
+  uint32 owner = __atomic_load_n(&panic_owner, __ATOMIC_ACQUIRE);
+
+  if (owner != 0) {
+    if (owner != (uint32)cpuid() + 1 ||
+        __atomic_load_n(&panicked, __ATOMIC_ACQUIRE))
+      for (;;)
+        ;
+    early_uart_putc(c);
+    return;
+  }
+
+  push_off();
+  if (__atomic_load_n(&panicked, __ATOMIC_ACQUIRE))
     for (;;)
       ;
-
+  uart_output_enter();
   early_uart_putc(c);
+  uart_output_leave();
+  pop_off();
+}
 
-  if (!panicking)
-    pop_off();
+// Elect one panic writer, prevent new normal THR writes, and drain any writer
+// that entered before the election. This cannot deadlock on an xv6 lock held
+// by the panicking or an interrupted CPU.
+void
+uartpanic(void)
+{
+  uint32 owner = (uint32)cpuid() + 1;
+  uint32 expected = 0;
+
+  if (!__atomic_compare_exchange_n(&panic_owner, &expected, owner, 0,
+                                   __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE) &&
+      expected != owner)
+    for (;;)
+      ;
+  uart_write(UART_IER, 0);
+  while (__atomic_load_n(&output_owner, __ATOMIC_ACQUIRE) != 0)
+    ;
+  while ((uart_read(UART_LSR) & UART_LSR_THR_EMPTY) == 0)
+    ;
 }
 
 void
 uartintr(void)
 {
   if (!runtime_enabled)
-    panic("uart interrupt state");
+    uart_fail("uart interrupt state");
   for (;;) {
     uint8 reason = uart_read(UART_IIR) & UART_IIR_REASON_MASK;
 
@@ -184,9 +264,9 @@ uartintr(void)
       acquire(&tx_lock);
       if ((uart_read(UART_LSR) & UART_LSR_THR_EMPTY) == 0) {
         release(&tx_lock);
-        panic("uart transmit state");
+        uart_fail("uart transmit state");
       }
-      tx_busy = 0;
+      __atomic_store_n(&tx_busy, 0, __ATOMIC_RELAXED);
       wakeup(&tx_chan);
       release(&tx_lock);
     } else if (reason == UART_IIR_RX_READY || reason == UART_IIR_RX_TIMEOUT) {
@@ -195,7 +275,7 @@ uartintr(void)
       while ((c = uartgetc()) >= 0)
         consoleintr(c);
     } else {
-      panic("uart interrupt");
+      uart_fail("uart interrupt");
     }
   }
 }

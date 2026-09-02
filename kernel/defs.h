@@ -152,9 +152,11 @@ void            usertrap(void);
 void            usertrapret(void);
 
 // uart.c
+void            early_uart_init(void);
 void            uartinit(void);
 void            uartenable(void);
 void            uartintr(void);
+void            uartpanic(void);
 void            uartwrite(char [], int);
 void            uartputc_sync(int);
 

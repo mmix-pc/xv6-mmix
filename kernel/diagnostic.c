@@ -1,14 +1,21 @@
 #include "boot.h"
-#include "early_uart.h"
 #include "kalloc.h"
 #include "diagnostic.h"
 #include "printk.h"
+#include "vm.h"
+#include "defs.h"
+
+static void
+diagnostic_putc(int c)
+{
+  uartputc_sync(c);
+}
 
 static void
 diagnostic_puts(const char *s)
 {
   while (*s != 0)
-    early_uart_putc(*s++);
+    diagnostic_putc(*s++);
 }
 
 static void
@@ -23,7 +30,7 @@ diagnostic_put_u64(uint64 value)
   } while (value != 0);
 
   while (count != 0)
-    early_uart_putc(digits[--count]);
+    diagnostic_putc(digits[--count]);
 }
 
 static void
@@ -32,7 +39,7 @@ diagnostic_put_int(int value)
   long wide = value;
 
   if (wide < 0) {
-    early_uart_putc('-');
+    diagnostic_putc('-');
     wide = -wide;
   }
 
@@ -45,7 +52,7 @@ diagnostic_put_hex64(uint64 value)
   diagnostic_puts("0x");
   for (int shift = 60; shift >= 0; shift -= 4) {
     uint64 digit = (value >> shift) & 0xf;
-    early_uart_putc(digit < 10 ? '0' + digit : 'a' + digit - 10);
+    diagnostic_putc(digit < 10 ? '0' + digit : 'a' + digit - 10);
   }
 }
 
@@ -68,14 +75,14 @@ diagnostic_boot(const struct mmix_boot_state *boot)
   diagnostic_put_u64(boot->startup_cpu_id);
   diagnostic_puts("\nbootinfo pa: ");
   diagnostic_put_hex64(boot->bootinfo_pa);
-  early_uart_putc('\n');
+  diagnostic_putc('\n');
 
   if (boot->bootinfo_status != MMIX_BOOTINFO_OK)
     return;
 
   diagnostic_puts("ram total: ");
   diagnostic_put_hex64(info->memory.total_size);
-  early_uart_putc('\n');
+  diagnostic_putc('\n');
 
   for (uint64 index = 0; index < info->memory.range_count; index++) {
     const struct mmix_physical_range *range = &info->memory.range[index];
@@ -98,26 +105,26 @@ diagnostic_boot(const struct mmix_boot_state *boot)
   diagnostic_put_address("uart0: base=", info->uart_base);
   diagnostic_puts(" irq=");
   diagnostic_put_u64(info->uart_irq);
-  early_uart_putc('\n');
+  diagnostic_putc('\n');
 
   diagnostic_put_address("timer: base=", info->timer_base);
   diagnostic_puts(" irq-base=");
   diagnostic_put_u64(info->timer_irq_base);
   diagnostic_puts(" irq-count=");
   diagnostic_put_u64(info->timer_irq_count);
-  early_uart_putc('\n');
+  diagnostic_putc('\n');
 
   diagnostic_put_address("intc: base=", info->intc_base);
   diagnostic_puts(" irq-count=");
   diagnostic_put_u64(info->intc_irq_count);
-  early_uart_putc('\n');
+  diagnostic_putc('\n');
 
   diagnostic_put_address("virtio-mmio0: base=", info->virtio_mmio_base);
   diagnostic_puts(" irq=");
   diagnostic_put_u64(info->virtio_mmio_irq);
   diagnostic_puts(" count=");
   diagnostic_put_u64(info->virtio_mmio_count);
-  early_uart_putc('\n');
+  diagnostic_putc('\n');
 }
 
 void
@@ -216,5 +223,5 @@ diagnostic_trap(const struct mmix_trap_diagnostic *diagnostic)
   diagnostic_put_u64(diagnostic->ipi_received);
   diagnostic_puts(" ipi-acknowledged=");
   diagnostic_put_u64(diagnostic->ipi_acknowledged);
-  early_uart_putc('\n');
+  diagnostic_putc('\n');
 }

@@ -3,7 +3,6 @@
 #include "mmix.h"
 #include "defs.h"
 #include "diagnostic.h"
-#include "early_uart.h"
 #include "intc.h"
 #include "ipi.h"
 #include "kcontext.h"

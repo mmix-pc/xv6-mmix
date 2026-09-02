@@ -73,7 +73,7 @@ printk(char *fmt, ...)
   int i, cx, c0, c1, c2;
   char *s;
 
-  if (panicking == 0)
+  if (__atomic_load_n(&panicking, __ATOMIC_ACQUIRE) == 0)
     acquire(&pr.lock);
 
   va_start(ap, fmt);
@@ -134,7 +134,7 @@ printk(char *fmt, ...)
   }
   va_end(ap);
 
-  if (panicking == 0)
+  if (__atomic_load_n(&panicking, __ATOMIC_ACQUIRE) == 0)
     release(&pr.lock);
 
   return 0;
@@ -144,10 +144,13 @@ void
 panic(char *s)
 {
   mmix_intr_mask_write(0);
-  panicking = 1;
-  printk("panic: ");
+  uartpanic();
+  __atomic_store_n(&panicking, 1, __ATOMIC_RELEASE);
+  // A peer may have been stopped between characters of an ordinary message.
+  // Start the panic diagnostic on an unambiguous line after UART takeover.
+  printk("\npanic: ");
   printk("%s\n", s);
-  panicked = 1; // freeze uart output from other CPUs
+  __atomic_store_n(&panicked, 1, __ATOMIC_RELEASE);
   for (;;)
     ;
 }
