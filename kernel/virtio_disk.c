@@ -681,10 +681,9 @@ virtio_disk_init(void)
   virtio_write(VIRTIO_MMIO_QUEUE_READY, 1);
   if (virtio_read(VIRTIO_MMIO_QUEUE_READY) != 1)
     virtio_fail("virtio queue publish");
-  if (intc_set_enabled(VIRTIO0_IRQ, 1) != MMIX_INTC_OK)
-    virtio_fail("virtio irq enable");
 
-  // DRIVER_OK is the final transition after queue and interrupt publication.
+  // Runtime INTC startup installs the selected IRQ owner after this global
+  // device initialization publishes the complete queue.
   virtio_set_status(VIRTIO_CONFIG_S_DRIVER_OK);
   disk.ready = 1;
 

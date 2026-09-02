@@ -268,6 +268,7 @@ boot_secondary_context_ready(void)
   struct cpu *c = mycpu();
   uint64 stage;
   uint32 enabled;
+  uint32 expected_enabled;
   int pending;
   int ipi_is_pending;
   uint64 ipi_received;
@@ -299,9 +300,11 @@ boot_secondary_context_ready(void)
 
   if (timer_irq(&timer_irq_number) != MMIX_TIMER_OK ||
       timer_arm_next() != MMIX_TIMER_OK ||
-      intc_set_enabled(timer_irq_number, 1) != MMIX_INTC_OK ||
+      intc_enable_runtime(timer_irq_number) != MMIX_INTC_OK ||
+      intc_runtime_mask(timer_irq_number, &expected_enabled) !=
+        MMIX_INTC_OK ||
       intc_enabled(&enabled) != MMIX_INTC_OK ||
-      enabled != (1U << timer_irq_number))
+      enabled != expected_enabled)
     goto fail;
   intr_on();
   while (timer_ticks() == 0)
@@ -403,6 +406,7 @@ boot_publish_interrupt_ready(void)
   uint64 entries;
   uint64 returns;
   uint32 enabled;
+  uint32 expected_enabled;
   uint32 timer_irq_number;
   struct cpu *c = mycpu();
 
@@ -424,8 +428,9 @@ boot_publish_interrupt_ready(void)
       c->trap.rk_shadow != mmix_rk_read() || c->trap.active != 0 ||
       c->proc != 0 || c->noff != 1 || c->intena != 1 ||
       timer_ticks() == 0 || entries == 0 || entries != returns ||
-      (enabled & (1U << timer_irq_number)) == 0 ||
-      (cpu_id != BOOT_CPU_ID && enabled != (1U << timer_irq_number)))
+      intc_runtime_mask(timer_irq_number, &expected_enabled) !=
+        MMIX_INTC_OK ||
+      enabled != expected_enabled)
     goto fail;
 
   printk("interrupt-ready: cpu=%d timer=%llu noff=%d handlers=%llu/%llu\n",

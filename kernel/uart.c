@@ -117,15 +117,21 @@ void
 uartenable(void)
 {
   int c;
+  uint32 enabled;
+  uint32 owner;
 
   if (!runtime_initialized || runtime_enabled || intr_get())
     panic("uart enable");
 
+  if (intc_shared_owner(UART0_IRQ, &owner) != MMIX_INTC_OK ||
+      owner != (uint32)cpuid() ||
+      intc_enabled(&enabled) != MMIX_INTC_OK ||
+      (enabled & (1U << UART0_IRQ)) == 0)
+    panic("uart affinity");
+
   while ((c = uartgetc()) >= 0)
     consoleintr(c);
   (void)uart_read(UART_IIR);
-  if (intc_set_enabled(UART0_IRQ, 1) != MMIX_INTC_OK)
-    panic("uart irq enable");
   uart_write(UART_IER, UART_IER_RX_ENABLE | UART_IER_TX_ENABLE);
   if (uart_read(UART_IER) != (UART_IER_RX_ENABLE | UART_IER_TX_ENABLE))
     panic("uart irq state");

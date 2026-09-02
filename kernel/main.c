@@ -49,6 +49,8 @@ main(void)
   iinit();            // inode table
   fileinit();         // file table
   virtio_disk_init(); // emulated hard disk
+  if (intc_publish_affinity() != MMIX_INTC_OK)
+    panic("interrupt affinity publish");
   if (boot_publish_global_ready() < 0)
     panic("global publish");
   if (boot_wait_for_online() < 0)
@@ -58,8 +60,8 @@ main(void)
   if (timer_arm_next() != MMIX_TIMER_OK)
     panic("timer arm");
   if (timer_irq(&timer_irq_number) != MMIX_TIMER_OK ||
-      intc_set_enabled(timer_irq_number, 1) != MMIX_INTC_OK)
-    panic("timer irq enable");
+      intc_enable_runtime(timer_irq_number) != MMIX_INTC_OK)
+    panic("interrupt affinity");
   uartenable();
   intr_on();
   while (timer_ticks() == 0)

@@ -134,6 +134,7 @@ trap_interrupt_dispatch(uint64 rq, uint64 restore_rk, uint64 rxx,
   int pending;
   int status;
   int cpu_id = cpuid();
+  uint32 shared_owner;
   uint32 timer_irq_number;
 
   *serviced = 0;
@@ -159,7 +160,8 @@ trap_interrupt_dispatch(uint64 rq, uint64 restore_rk, uint64 rxx,
     return "invalid claim";
   *serviced = MMIX_RQ_INTC;
   if (*claim == UART0_IRQ) {
-    if (cpu_id != BOOT_CPU_ID)
+    if (intc_shared_owner(*claim, &shared_owner) != MMIX_INTC_OK ||
+        cpu_id != (int)shared_owner)
       return "foreign claim";
     uartintr();
     if (intc_complete(*claim) != MMIX_INTC_OK)
@@ -167,7 +169,8 @@ trap_interrupt_dispatch(uint64 rq, uint64 restore_rk, uint64 rxx,
     return 0;
   }
   if (*claim == VIRTIO0_IRQ) {
-    if (cpu_id != BOOT_CPU_ID)
+    if (intc_shared_owner(*claim, &shared_owner) != MMIX_INTC_OK ||
+        cpu_id != (int)shared_owner)
       return "foreign claim";
     virtio_disk_intr();
     if (intc_complete(*claim) != MMIX_INTC_OK)
