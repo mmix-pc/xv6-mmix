@@ -48,6 +48,7 @@ struct virtio_request_wire {
 
 struct virtio_request_info {
   struct buf *b;
+  uint64 generation;
   uint16 desc[VIRTIO_DESCRIPTORS_PER_REQ];
   uint8 write;
   uint8 active;
@@ -68,6 +69,9 @@ static struct {
   uint16 avail_idx;
   uint16 used_idx;
   uint outstanding;
+  uint64 next_generation;
+  uint64 submitted;
+  uint64 completed;
 
   uint64 capacity;
   uint32 offered[2];
@@ -149,9 +153,16 @@ static void
 virtio_fail(char *message)
 {
   uint32 status = virtio_read(VIRTIO_MMIO_STATUS);
+  uint32 owner = ~0U;
+  int owner_status = intc_shared_owner(VIRTIO0_IRQ, &owner);
 
   // A responsive transport must observe FAILED before the driver stops.
   virtio_write(VIRTIO_MMIO_STATUS, status | VIRTIO_CONFIG_S_FAILED);
+  printk("virtio failure: cpu=%d owner=%u/%d status=0x%x irq=0x%x "
+         "avail=%u used=%u outstanding=%u submitted=%lu completed=%lu\n",
+         cpuid(), owner, owner_status, status,
+         virtio_read(VIRTIO_MMIO_INTERRUPT_STATUS), disk.avail_idx,
+         disk.used_idx, disk.outstanding, disk.submitted, disk.completed);
   panic(message);
 }
 
@@ -419,6 +430,9 @@ virtio_prepare_request(uint head, struct buf *b, int write, uint64 sector)
     data_flags |= VRING_DESC_F_WRITE;
 
   info->b = b;
+  info->generation = ++disk.next_generation;
+  if (info->generation == 0)
+    virtio_fail("virtio request generation");
   info->write = write;
   info->active = 1;
   wire->status = 0xff;
@@ -525,7 +539,7 @@ virtio_complete_request(uint head, uint32 used_length)
   if (head >= NUM)
     virtio_fail("virtio used id");
   info = &disk.info[head];
-  if (!virtio_chain_matches(head))
+  if (!virtio_chain_matches(head) || info->generation == 0 || !info->b->disk)
     virtio_fail("virtio used chain");
   wire = &disk.wire[head];
   b = info->b;
@@ -548,11 +562,15 @@ virtio_complete_request(uint head, uint32 used_length)
   b->disk = 0;
   virtio_free_chain(info);
   info->b = 0;
+  info->generation = 0;
   info->write = 0;
   info->active = 0;
   if (disk.outstanding == 0)
     virtio_fail("virtio outstanding");
   disk.outstanding--;
+  if (disk.completed == disk.submitted)
+    virtio_fail("virtio completion count");
+  disk.completed++;
   wakeup(b);
   wakeup(&disk.free[0]);
 }
@@ -719,6 +737,9 @@ virtio_disk_rw(struct buf *b, int write)
   if (disk.outstanding >= NUM / VIRTIO_DESCRIPTORS_PER_REQ)
     virtio_fail("virtio request count");
   disk.outstanding++;
+  if (disk.submitted == ~0ULL)
+    virtio_fail("virtio submission count");
+  disk.submitted++;
   virtio_publish_request(head);
 
   while (b->disk)
@@ -730,9 +751,12 @@ void
 virtio_disk_intr(void)
 {
   uint32 interrupt;
+  uint32 owner;
 
   acquire(&disk.lock);
-  if (!disk.ready)
+  if (!disk.ready ||
+      intc_shared_owner(VIRTIO0_IRQ, &owner) != MMIX_INTC_OK ||
+      owner != (uint32)cpuid())
     virtio_fail("virtio interrupt state");
   interrupt = virtio_read(VIRTIO_MMIO_INTERRUPT_STATUS);
   if (interrupt == 0)
