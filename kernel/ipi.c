@@ -278,31 +278,36 @@ ipi_service(ipi_work_handler handler)
   observed = __atomic_load_n(&target->requested, __ATOMIC_ACQUIRE);
   acknowledged = __atomic_load_n(&target->acknowledged, __ATOMIC_RELAXED);
   received = __atomic_load_n(&target->received, __ATOMIC_RELAXED);
-  if (observed == 0 || observed <= acknowledged || received == ~0ULL)
+  if (observed == 0 || observed < acknowledged || received == ~0ULL)
     return MMIX_IPI_BAD_STATE;
 
-  work_classes = __atomic_load_n(&target->work_classes, __ATOMIC_ACQUIRE);
-  if ((work_classes & ~MMIX_IPI_WORK_VALID) != 0)
-    return MMIX_IPI_BAD_STATE;
-  if (work_classes != 0) {
-    work_generation =
-      __atomic_load_n(&target->work_generation, __ATOMIC_RELAXED);
-    work_notification =
-      __atomic_load_n(&target->work_notification, __ATOMIC_RELAXED);
-    work_acknowledged =
-      __atomic_load_n(&target->work_acknowledged, __ATOMIC_RELAXED);
-    if (work_generation == 0 || work_notification == 0 ||
-        work_generation <= work_acknowledged)
+  // A sender can publish a generation that is consumed through an older,
+  // coalesced notification before its own device write. That later write is
+  // redundant, but must still be cleared and counted as a handler entry.
+  if (observed != acknowledged) {
+    work_classes = __atomic_load_n(&target->work_classes, __ATOMIC_ACQUIRE);
+    if ((work_classes & ~MMIX_IPI_WORK_VALID) != 0)
       return MMIX_IPI_BAD_STATE;
-    if (work_notification <= observed) {
-      if (handler == 0 ||
-          handler(work_classes, work_generation) != MMIX_IPI_OK)
+    if (work_classes != 0) {
+      work_generation =
+        __atomic_load_n(&target->work_generation, __ATOMIC_RELAXED);
+      work_notification =
+        __atomic_load_n(&target->work_notification, __ATOMIC_RELAXED);
+      work_acknowledged =
+        __atomic_load_n(&target->work_acknowledged, __ATOMIC_RELAXED);
+      if (work_generation == 0 || work_notification == 0 ||
+          work_generation <= work_acknowledged)
         return MMIX_IPI_BAD_STATE;
-      // Clear the published work before acknowledging it. A sender that sees
-      // the acknowledgement can then safely reuse this target's work slot.
-      __atomic_store_n(&target->work_classes, 0, __ATOMIC_RELAXED);
-      __atomic_store_n(&target->work_acknowledged, work_generation,
-                       __ATOMIC_RELEASE);
+      if (work_notification <= observed) {
+        if (handler == 0 ||
+            handler(work_classes, work_generation) != MMIX_IPI_OK)
+          return MMIX_IPI_BAD_STATE;
+        // Clear the published work before acknowledging it. A sender that sees
+        // the acknowledgement can then safely reuse this target's work slot.
+        __atomic_store_n(&target->work_classes, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&target->work_acknowledged, work_generation,
+                         __ATOMIC_RELEASE);
+      }
     }
   }
 
