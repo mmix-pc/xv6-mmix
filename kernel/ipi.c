@@ -4,9 +4,6 @@
 #include "mmix.h"
 #include "platform.h"
 
-// FIXME: Remove after this driver adopts the platform query interface.
-extern struct platform mmix_platform;
-
 enum {
   MMIX_IPI_REGISTER_SIZE = 8,
   MMIX_IPI_ACTIVE_OFFSET = 0x0000,
@@ -31,27 +28,31 @@ struct ipi_target_state {
 static struct ipi_target_state ipi_targets[MMIX_MAX_CPUS];
 static uint64 ipi_generation;
 static uint32 ipi_send_lock;
+static struct platform_ipi_config ipi_config;
+static uint32 ipi_cpu_count;
+static uint64 ipi_configured;
 
 #define MMIX_IPI_WORK_VALID MMIX_IPI_WORK_TRANSLATION
 
 static uint64
 ipi_active_targets(void)
 {
-  return (1ULL << mmix_platform.devices.ipi.context_count) - 1;
+  return (1ULL << ipi_config.context_count) - 1;
 }
 
 static volatile uint64 *
 ipi_register(uint64 offset)
 {
-  return (volatile uint64 *)(mmix_platform.devices.ipi.global.start + offset);
+  return (volatile uint64 *)(ipi_config.physical_global.physical_base +
+                             offset);
 }
 
 static uint64
 ipi_context_register(uint32 target, uint64 offset)
 {
-  return mmix_platform.devices.ipi.contexts.start -
-           mmix_platform.devices.ipi.global.start +
-         (uint64)target * MMIX_IPI_CONTEXT_STRIDE + offset;
+  return ipi_config.physical_contexts.physical_base -
+           ipi_config.physical_global.physical_base +
+         (uint64)target * ipi_config.context_stride + offset;
 }
 
 static uint64
@@ -67,19 +68,38 @@ ipi_write(uint64 offset, uint64 value)
 }
 
 static int
-ipi_platform_valid(void)
+ipi_configure(void)
 {
-  const struct platform_ipi *ipi = &mmix_platform.devices.ipi;
+  struct platform_ipi_config config;
+  uint32 cpu_count;
 
-  return (ipi->global.start & (MMIX_IPI_REGISTER_SIZE - 1)) == 0 &&
-         ipi->contexts.start == ipi->global.start + MMIX_IPI_CONTEXT_BASE &&
-         ipi->context_stride == MMIX_IPI_CONTEXT_STRIDE &&
-         mmix_platform.topology.count > 0 &&
-         mmix_platform.topology.count <= MMIX_MAX_CPUS &&
-         ipi->context_count == mmix_platform.topology.count &&
-         ipi->context_count <= IPI_TARGET_COUNT_MAX &&
-         ipi->request_bit == MMIX_RQ_IPI &&
-         ipi_read(MMIX_IPI_ACTIVE_OFFSET) == ipi_active_targets();
+  if (__atomic_load_n(&ipi_configured, __ATOMIC_ACQUIRE) != 0)
+    return 1;
+  if (cpuid() != BOOT_CPU_ID || platform_ipi_config(&config) != PLATFORM_OK)
+    return 0;
+  cpu_count = platform_cpu_count();
+  if ((config.physical_global.physical_base &
+       (MMIX_IPI_REGISTER_SIZE - 1)) != 0 ||
+      config.physical_contexts.physical_base !=
+        config.physical_global.physical_base + MMIX_IPI_CONTEXT_BASE ||
+      config.context_stride != MMIX_IPI_CONTEXT_STRIDE || cpu_count == 0 ||
+      cpu_count > MMIX_MAX_CPUS || config.context_count != cpu_count ||
+      config.context_count > IPI_TARGET_COUNT_MAX ||
+      config.request_bit != MMIX_RQ_IPI)
+    return 0;
+
+  ipi_config = config;
+  ipi_cpu_count = cpu_count;
+  if (ipi_read(MMIX_IPI_ACTIVE_OFFSET) != ipi_active_targets())
+    return 0;
+  __atomic_store_n(&ipi_configured, 1, __ATOMIC_RELEASE);
+  return 1;
+}
+
+static int
+ipi_config_valid(void)
+{
+  return __atomic_load_n(&ipi_configured, __ATOMIC_ACQUIRE) != 0;
 }
 
 static int
@@ -87,15 +107,13 @@ ipi_current_valid(void)
 {
   int id = cpuid();
 
-  return ipi_platform_valid() && id >= 0 &&
-         (uint64)id < mmix_platform.devices.ipi.context_count;
+  return ipi_config_valid() && id >= 0 && (uint32)id < ipi_cpu_count;
 }
 
 static int
 ipi_target_valid(uint32 target)
 {
-  return ipi_platform_valid() &&
-         (uint64)target < mmix_platform.devices.ipi.context_count;
+  return ipi_config_valid() && target < ipi_config.context_count;
 }
 
 static int
@@ -117,7 +135,7 @@ ipi_allocate_generation(uint64 *generation)
 int
 ipi_validate(void)
 {
-  return ipi_platform_valid() ? MMIX_IPI_OK : MMIX_IPI_BAD_PLATFORM;
+  return ipi_configure() ? MMIX_IPI_OK : MMIX_IPI_BAD_PLATFORM;
 }
 
 int
@@ -127,7 +145,7 @@ ipi_init(void)
   uint64 status;
   int id = cpuid();
 
-  if (!ipi_current_valid())
+  if (!ipi_configure() || !ipi_current_valid())
     return MMIX_IPI_BAD_PLATFORM;
 
   target = &ipi_targets[id];
@@ -174,7 +192,7 @@ ipi_send(uint64 targets, uint64 *generation)
   }
 
   for (uint32 target = 0;
-       target < mmix_platform.devices.ipi.context_count; target++) {
+       target < ipi_config.context_count; target++) {
     if ((targets & (1ULL << target)) == 0)
       continue;
     __atomic_store_n(&ipi_targets[target].requested, allocated,
@@ -210,7 +228,7 @@ ipi_send_work(uint64 targets, uint64 classes, uint64 work_generation,
 
   while (__atomic_exchange_n(&ipi_send_lock, 1, __ATOMIC_ACQUIRE) != 0)
     ;
-  for (uint32 id = 0; id < mmix_platform.devices.ipi.context_count; id++) {
+  for (uint32 id = 0; id < ipi_config.context_count; id++) {
     if ((targets & (1ULL << id)) == 0)
       continue;
     target = &ipi_targets[id];
@@ -229,7 +247,7 @@ ipi_send_work(uint64 targets, uint64 classes, uint64 work_generation,
     return status;
   }
 
-  for (uint32 id = 0; id < mmix_platform.devices.ipi.context_count; id++) {
+  for (uint32 id = 0; id < ipi_config.context_count; id++) {
     if ((targets & (1ULL << id)) == 0)
       continue;
     target = &ipi_targets[id];

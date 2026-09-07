@@ -2,9 +2,7 @@
 #include "cpu.h"
 #include "intc.h"
 #include "platform.h"
-
-// FIXME: Remove after this driver adopts the platform query interface.
-extern struct platform mmix_platform;
+#include "timer.h"
 
 enum {
   MMIX_INTC_REGISTER_SIZE = 4,
@@ -26,21 +24,51 @@ struct intc_affinity_state {
 
 static struct intc_affinity_state intc_affinity;
 static uint32 intc_active_claim[MMIX_MAX_CPUS];
+static struct platform_intc_config intc_config;
+static uint32 intc_cpu_count;
+static uint32 intc_timer_interrupts[MMIX_MAX_CPUS];
+static uint64 intc_configured;
 
 static int
-intc_platform_valid(void)
+intc_configure(void)
 {
-  const struct platform_interrupt_controller *intc =
-    &mmix_platform.devices.interrupt_controller;
+  struct platform_intc_config config;
+  uint32 cpu_count;
+  uint32 timer_interrupts[MMIX_MAX_CPUS];
 
-  return (intc->global.start & (MMIX_INTC_REGISTER_SIZE - 1)) == 0 &&
-         intc->contexts.start == intc->global.start + MMIX_INTC_CONTEXT_BASE &&
-         intc->context_stride == MMIX_INTC_CONTEXT_STRIDE &&
-         mmix_platform.topology.count > 0 &&
-         mmix_platform.topology.count <= MMIX_MAX_CPUS &&
-         intc->context_count == mmix_platform.topology.count &&
-         intc->source_count > 1 &&
-         intc->source_count <= MMIX_INTC_MAX_IRQ_COUNT;
+  if (__atomic_load_n(&intc_configured, __ATOMIC_ACQUIRE) != 0)
+    return 1;
+  if (cpuid() != BOOT_CPU_ID ||
+      platform_intc_config(&config) != PLATFORM_OK)
+    return 0;
+  cpu_count = platform_cpu_count();
+  if ((config.physical_global.physical_base &
+       (MMIX_INTC_REGISTER_SIZE - 1)) != 0 ||
+      config.physical_contexts.physical_base !=
+        config.physical_global.physical_base + MMIX_INTC_CONTEXT_BASE ||
+      config.context_stride != MMIX_INTC_CONTEXT_STRIDE || cpu_count == 0 ||
+      cpu_count > MMIX_MAX_CPUS || config.context_count != cpu_count ||
+      config.source_count <= 1 ||
+      config.source_count > MMIX_INTC_MAX_IRQ_COUNT)
+    return 0;
+  for (uint32 id = 0; id < cpu_count; id++)
+    if (platform_timer_interrupt(id, &timer_interrupts[id]) != PLATFORM_OK ||
+        timer_interrupts[id] != MMIX_TIMER_IRQ + id ||
+        timer_interrupts[id] >= config.source_count)
+      return 0;
+
+  intc_config = config;
+  intc_cpu_count = cpu_count;
+  for (uint32 id = 0; id < cpu_count; id++)
+    intc_timer_interrupts[id] = timer_interrupts[id];
+  __atomic_store_n(&intc_configured, 1, __ATOMIC_RELEASE);
+  return 1;
+}
+
+static int
+intc_config_valid(void)
+{
+  return __atomic_load_n(&intc_configured, __ATOMIC_ACQUIRE) != 0;
 }
 
 static int
@@ -48,30 +76,28 @@ intc_current_valid(void)
 {
   int id = cpuid();
 
-  return intc_platform_valid() && id >= 0 &&
-         (uint64)id < mmix_platform.topology.count;
+  return intc_config_valid() && id >= 0 && (uint32)id < intc_cpu_count;
 }
 
 static int
 intc_irq_valid(uint32 irq)
 {
-  return intc_platform_valid() && irq != 0 &&
-         irq < mmix_platform.devices.interrupt_controller.source_count;
+  return intc_config_valid() && irq != 0 && irq < intc_config.source_count;
 }
 
 static volatile uint32 *
 intc_register(uint64 offset)
 {
-  return (volatile uint32 *)(
-    mmix_platform.devices.interrupt_controller.global.start + offset);
+  return (volatile uint32 *)(intc_config.physical_global.physical_base +
+                             offset);
 }
 
 static uint64
 intc_context_register(uint64 offset)
 {
-  return mmix_platform.devices.interrupt_controller.contexts.start -
-           mmix_platform.devices.interrupt_controller.global.start +
-         (uint64)cpuid() * MMIX_INTC_CONTEXT_STRIDE + offset;
+  return intc_config.physical_contexts.physical_base -
+           intc_config.physical_global.physical_base +
+         (uint64)cpuid() * intc_config.context_stride + offset;
 }
 
 static uint32
@@ -89,7 +115,7 @@ intc_write(uint64 offset, uint32 value)
 static int
 intc_affinity_valid(void)
 {
-  uint64 cpu_count = mmix_platform.topology.count;
+  uint64 cpu_count = intc_cpu_count;
   uint64 uart_owner;
   uint64 virtio_owner;
 
@@ -111,7 +137,7 @@ intc_current_owns(uint32 irq)
 
   if (!intc_current_valid() || !intc_affinity_valid())
     return 0;
-  if (irq == mmix_platform.devices.timer.interrupts[id])
+  if (irq == intc_timer_interrupts[id])
     return 1;
   if (irq == UART0_IRQ)
     return __atomic_load_n(&intc_affinity.uart_owner,
@@ -125,7 +151,7 @@ intc_current_owns(uint32 irq)
 int
 intc_validate(void)
 {
-  return intc_platform_valid() ? MMIX_INTC_OK : MMIX_INTC_BAD_PLATFORM;
+  return intc_configure() ? MMIX_INTC_OK : MMIX_INTC_BAD_PLATFORM;
 }
 
 int
@@ -134,7 +160,7 @@ intc_init(void)
   int id = cpuid();
   uint64 enable;
 
-  if (!intc_current_valid())
+  if (!intc_configure() || !intc_current_valid())
     return MMIX_INTC_BAD_PLATFORM;
 
   enable = intc_context_register(MMIX_INTC_CONTEXT_ENABLE_OFFSET);
@@ -160,7 +186,7 @@ intc_publish_affinity(void)
   __atomic_store_n(&intc_affinity.uart_owner, BOOT_CPU_ID,
                    __ATOMIC_RELAXED);
   __atomic_store_n(&intc_affinity.virtio_owner,
-                   mmix_platform.topology.count > 1 ? 1 : BOOT_CPU_ID,
+                   intc_cpu_count > 1 ? 1 : BOOT_CPU_ID,
                    __ATOMIC_RELAXED);
   __atomic_store_n(&intc_affinity.generation,
                    MMIX_INTC_AFFINITY_GENERATION, __ATOMIC_RELEASE);
@@ -226,7 +252,7 @@ intc_shared_owner(uint32 irq, uint32 *owner)
 
   if (owner == 0)
     return MMIX_INTC_BAD_ARGUMENT;
-  if (!intc_platform_valid() || !intc_affinity_valid())
+  if (!intc_config_valid() || !intc_affinity_valid())
     return MMIX_INTC_BAD_PLATFORM;
   if (irq == UART0_IRQ)
     selected = __atomic_load_n(&intc_affinity.uart_owner, __ATOMIC_RELAXED);
@@ -235,7 +261,7 @@ intc_shared_owner(uint32 irq, uint32 *owner)
                                __ATOMIC_RELAXED);
   else
     return MMIX_INTC_BAD_IRQ;
-  if (selected >= mmix_platform.topology.count)
+  if (selected >= intc_cpu_count)
     return MMIX_INTC_BAD_STATE;
   *owner = (uint32)selected;
   return MMIX_INTC_OK;
@@ -253,7 +279,7 @@ intc_runtime_mask(uint32 timer_irq, uint32 *mask)
     return MMIX_INTC_BAD_ARGUMENT;
   if (!intc_current_valid() || !intc_affinity_valid())
     return MMIX_INTC_BAD_PLATFORM;
-  expected_timer = mmix_platform.devices.timer.interrupts[id];
+  expected_timer = intc_timer_interrupts[id];
   if (timer_irq != expected_timer || !intc_irq_valid(timer_irq) ||
       intc_shared_owner(UART0_IRQ, &uart_owner) != MMIX_INTC_OK ||
       intc_shared_owner(VIRTIO0_IRQ, &virtio_owner) != MMIX_INTC_OK)
