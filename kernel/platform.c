@@ -3,6 +3,11 @@
 #include "memlayout.h"
 #include "platform.h"
 
+// FIXME: Move this immutable state into the platform module after every
+// consumer uses the query interface.
+extern struct platform mmix_platform;
+extern uint64 mmix_fdt_address;
+
 enum node_role {
   NODE_OTHER,
   NODE_ROOT,
@@ -1348,6 +1353,208 @@ platform_decode_devices(const struct fdt *fdt, struct platform *platform)
   if (status != PLATFORM_OK)
     return status;
   platform->devices = devices;
+  return PLATFORM_OK;
+}
+
+static void
+copy_physical_range(struct platform_physical_range *destination,
+                    const struct platform_mmio_range *source)
+{
+  destination->physical_base = source->start;
+  destination->size = source->size;
+}
+
+uint64
+platform_fdt_physical_address(void)
+{
+  return mmix_fdt_address;
+}
+
+uint32
+platform_cpu_count(void)
+{
+  return mmix_platform.topology.count;
+}
+
+uint64
+platform_cpu_mask(void)
+{
+  uint32 count = platform_cpu_count();
+
+  if (count == 0 || count > NCPU)
+    return 0;
+  return (1ULL << count) - 1;
+}
+
+int
+platform_cpu_initial_stack(uint32 cpu_id, struct platform_physical_range *stack)
+{
+  const struct platform_cpu *cpu;
+
+  if (stack == 0 || cpu_id >= platform_cpu_count())
+    return PLATFORM_BAD_ARGUMENT;
+  cpu = &mmix_platform.topology.cpus[cpu_id];
+  *stack = (struct platform_physical_range){
+    .physical_base = cpu->initial_register_stack,
+    .size = cpu->initial_register_stack_size,
+  };
+  return PLATFORM_OK;
+}
+
+int
+platform_cpu_initial_stack_contains(uint32 cpu_id, uint64 physical_address)
+{
+  struct platform_physical_range stack;
+
+  if (platform_cpu_initial_stack(cpu_id, &stack) != PLATFORM_OK)
+    return 0;
+  return physical_address >= stack.physical_base &&
+         physical_address - stack.physical_base < stack.size;
+}
+
+int
+platform_ram(struct platform_physical_range *ram)
+{
+  if (ram == 0)
+    return PLATFORM_BAD_ARGUMENT;
+  *ram = (struct platform_physical_range){
+    .physical_base = mmix_platform.memory.ram_start,
+    .size = mmix_platform.memory.ram_size,
+  };
+  return PLATFORM_OK;
+}
+
+uint32
+platform_reservation_count(void)
+{
+  return mmix_platform.memory.reservation_count;
+}
+
+int
+platform_reservation(uint32 index, struct platform_reservation_info *info)
+{
+  const struct platform_reservation *reservation;
+
+  if (info == 0 || index >= platform_reservation_count())
+    return PLATFORM_BAD_ARGUMENT;
+  reservation = &mmix_platform.memory.reservations[index];
+  *info = (struct platform_reservation_info){
+    .physical =
+      {
+        .physical_base = reservation->start,
+        .size = reservation->size,
+      },
+    .owner = reservation->owner,
+    .lifetime = reservation->lifetime,
+    .cpu_id = reservation->cpu_id,
+  };
+  return PLATFORM_OK;
+}
+
+int
+platform_intc_config(struct platform_intc_config *config)
+{
+  const struct platform_interrupt_controller *intc;
+
+  if (config == 0)
+    return PLATFORM_BAD_ARGUMENT;
+  intc = &mmix_platform.devices.interrupt_controller;
+  copy_physical_range(&config->physical_global, &intc->global);
+  copy_physical_range(&config->physical_contexts, &intc->contexts);
+  config->source_count = intc->source_count;
+  config->context_count = intc->context_count;
+  config->context_stride = intc->context_stride;
+  return PLATFORM_OK;
+}
+
+int
+platform_uart_config(struct platform_uart_config *config)
+{
+  const struct platform_uart *uart;
+
+  if (config == 0)
+    return PLATFORM_BAD_ARGUMENT;
+  uart = &mmix_platform.devices.uart;
+  copy_physical_range(&config->physical_registers, &uart->registers);
+  config->interrupt = uart->interrupt;
+  config->clock_frequency = uart->clock_frequency;
+  config->baud_rate = uart->baud_rate;
+  config->register_shift = uart->register_shift;
+  config->register_width = uart->register_width;
+  return PLATFORM_OK;
+}
+
+int
+platform_timer_config(struct platform_timer_config *config)
+{
+  const struct platform_timer *timer;
+
+  if (config == 0)
+    return PLATFORM_BAD_ARGUMENT;
+  timer = &mmix_platform.devices.timer;
+  copy_physical_range(&config->physical_global, &timer->global);
+  copy_physical_range(&config->physical_contexts, &timer->contexts);
+  config->context_count = timer->context_count;
+  config->context_stride = timer->context_stride;
+  config->clock_frequency = timer->clock_frequency;
+  return PLATFORM_OK;
+}
+
+int
+platform_timer_interrupt(uint32 cpu_id, uint32 *interrupt)
+{
+  if (interrupt == 0 || cpu_id >= platform_cpu_count() ||
+      cpu_id >= mmix_platform.devices.timer.context_count)
+    return PLATFORM_BAD_ARGUMENT;
+  *interrupt = mmix_platform.devices.timer.interrupts[cpu_id];
+  return PLATFORM_OK;
+}
+
+int
+platform_ipi_config(struct platform_ipi_config *config)
+{
+  const struct platform_ipi *ipi;
+
+  if (config == 0)
+    return PLATFORM_BAD_ARGUMENT;
+  ipi = &mmix_platform.devices.ipi;
+  copy_physical_range(&config->physical_global, &ipi->global);
+  copy_physical_range(&config->physical_contexts, &ipi->contexts);
+  config->context_count = ipi->context_count;
+  config->context_stride = ipi->context_stride;
+  config->request_bit = ipi->request_bit;
+  return PLATFORM_OK;
+}
+
+uint32
+platform_virtio_count(void)
+{
+  return mmix_platform.devices.virtio_count;
+}
+
+int
+platform_virtio_config(uint32 slot, struct platform_virtio_config *config)
+{
+  const struct platform_virtio_slot *virtio;
+
+  if (config == 0 || slot >= platform_virtio_count())
+    return PLATFORM_BAD_ARGUMENT;
+  virtio = &mmix_platform.devices.virtio[slot];
+  copy_physical_range(&config->physical_registers, &virtio->registers);
+  config->interrupt = virtio->interrupt;
+  return PLATFORM_OK;
+}
+
+int
+platform_framebuffer_config(struct platform_framebuffer_config *config)
+{
+  const struct platform_framebuffer *framebuffer;
+
+  if (config == 0)
+    return PLATFORM_BAD_ARGUMENT;
+  framebuffer = &mmix_platform.devices.framebuffer;
+  copy_physical_range(&config->physical_control, &framebuffer->control);
+  copy_physical_range(&config->physical_memory, &framebuffer->memory);
   return PLATFORM_OK;
 }
 
