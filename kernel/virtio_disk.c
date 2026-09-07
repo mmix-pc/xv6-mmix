@@ -14,8 +14,6 @@
 #include "defs.h"
 #include "fs.h"
 
-// FIXME: Remove after this driver adopts the platform query interface.
-extern struct platform mmix_platform;
 #include "buf.h"
 #include "virtio.h"
 
@@ -86,6 +84,8 @@ static struct {
   uint status_trace_count;
   int ready;
 } disk;
+static struct platform_virtio_config virtio_config;
+static int virtio_configured;
 
 static uint32
 virtio_bswap32(uint32 value)
@@ -95,21 +95,31 @@ virtio_bswap32(uint32 value)
 }
 
 static int
-virtio_platform_valid(void)
+virtio_configure(void)
 {
-  return mmix_platform.devices.virtio_count == VIRTIO_MMIO_COUNT &&
-         mmix_platform.devices.virtio[0].registers.start == VIRTIO0_BASE &&
-         mmix_platform.devices.virtio[0].interrupt == VIRTIO0_IRQ;
+  struct platform_virtio_config config;
+
+  if (platform_virtio_count() != VIRTIO_MMIO_COUNT ||
+      platform_virtio_config(0, &config) != PLATFORM_OK ||
+      config.physical_registers.physical_base != VIRTIO0_BASE ||
+      config.physical_registers.size <
+        VIRTIO_MMIO_CONFIG + 2 * sizeof(uint32) ||
+      config.interrupt != VIRTIO0_IRQ)
+    return -1;
+  virtio_config = config;
+  virtio_configured = 1;
+  return 0;
 }
 
 static volatile uint32 *
 virtio_register(uint offset)
 {
-  if (!virtio_platform_valid() || (offset & (sizeof(uint32) - 1)) != 0 ||
-      offset > VIRTIO0_SIZE - sizeof(uint32))
+  if (!virtio_configured || (offset & (sizeof(uint32) - 1)) != 0 ||
+      offset >
+        virtio_config.physical_registers.size - sizeof(uint32))
     panic("virtio register");
   return (volatile uint32 *)(
-    mmix_platform.devices.virtio[0].registers.start + offset);
+    virtio_config.physical_registers.physical_base + offset);
 }
 
 // QEMU exposes modern VirtIO MMIO as little-endian 32-bit registers. A native
@@ -158,7 +168,7 @@ virtio_fail(char *message)
 {
   uint32 status = virtio_read(VIRTIO_MMIO_STATUS);
   uint32 owner = ~0U;
-  int owner_status = intc_shared_owner(VIRTIO0_IRQ, &owner);
+  int owner_status = intc_shared_owner(virtio_config.interrupt, &owner);
 
   // A responsive transport must observe FAILED before the driver stops.
   virtio_write(VIRTIO_MMIO_STATUS, status | VIRTIO_CONFIG_S_FAILED);
@@ -621,6 +631,8 @@ virtio_disk_init(void)
 
   if (disk.ready)
     panic("virtio duplicate init");
+  if (virtio_configure() < 0)
+    panic("virtio platform");
   initlock(&disk.lock, "virtio_disk");
 
   magic = virtio_read(VIRTIO_MMIO_MAGIC_VALUE);
@@ -759,7 +771,7 @@ virtio_disk_intr(void)
 
   acquire(&disk.lock);
   if (!disk.ready ||
-      intc_shared_owner(VIRTIO0_IRQ, &owner) != MMIX_INTC_OK ||
+      intc_shared_owner(virtio_config.interrupt, &owner) != MMIX_INTC_OK ||
       owner != (uint32)cpuid())
     virtio_fail("virtio interrupt state");
   interrupt = virtio_read(VIRTIO_MMIO_INTERRUPT_STATUS);

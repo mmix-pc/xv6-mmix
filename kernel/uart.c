@@ -10,9 +10,6 @@
 #include "platform.h"
 #include "printk.h"
 
-// FIXME: Remove after this driver adopts the platform query interface.
-extern struct platform mmix_platform;
-
 // QEMU exposes a byte-spaced 16550-compatible UART at UART0_BASE.
 enum {
   UART_THR = 0,
@@ -43,6 +40,8 @@ enum {
 };
 
 #define EARLY_UART_ALIAS 0x8001000010000000UL
+#define UART_CLOCK_FREQUENCY 1843200U
+#define UART_BAUD_RATE 115200U
 
 static struct spinlock tx_lock;
 static int tx_busy;
@@ -51,17 +50,20 @@ static int runtime_initialized;
 static int runtime_enabled;
 static uint32 output_owner;
 static uint32 panic_owner;
+static struct platform_uart_config uart_config;
 
 static __attribute__((always_inline)) inline uint8
 uart_read(uint64 offset)
 {
-  return *(volatile uint8 *)(UART0_BASE + offset);
+  return *(volatile uint8 *)(uart_config.physical_registers.physical_base +
+                             (offset << uart_config.register_shift));
 }
 
 static __attribute__((always_inline)) inline void
 uart_write(uint64 offset, uint8 value)
 {
-  *(volatile uint8 *)(UART0_BASE + offset) = value;
+  *(volatile uint8 *)(uart_config.physical_registers.physical_base +
+                      (offset << uart_config.register_shift)) = value;
 }
 
 static __attribute__((always_inline)) inline uint8
@@ -136,11 +138,18 @@ uart_output_leave(void)
 void
 uartinit(void)
 {
+  struct platform_uart_config config;
+
   if (runtime_initialized || runtime_enabled ||
-      intr_get() ||
-      mmix_platform.devices.uart.registers.start != UART0_BASE ||
-      mmix_platform.devices.uart.interrupt != UART0_IRQ)
+      intr_get() || platform_uart_config(&config) != PLATFORM_OK ||
+      config.physical_registers.physical_base != UART0_BASE ||
+      config.physical_registers.size <= UART_LSR ||
+      config.interrupt != UART0_IRQ ||
+      config.clock_frequency != UART_CLOCK_FREQUENCY ||
+      config.baud_rate != UART_BAUD_RATE || config.register_shift != 0 ||
+      config.register_width != sizeof(uint8))
     panic("uart init");
+  uart_config = config;
   if (uart_read(UART_LCR) != UART_LCR_EIGHT_BITS)
     panic("uart state");
 
@@ -164,7 +173,7 @@ uart_fail(char *message)
   uint32 enabled = 0;
   uint32 owner = ~0U;
   int enabled_status = intc_enabled(&enabled);
-  int owner_status = intc_shared_owner(UART0_IRQ, &owner);
+  int owner_status = intc_shared_owner(uart_config.interrupt, &owner);
 
   printk("uart failure: cpu=%d owner=%u/%d enabled=0x%x/%d "
          "ier=0x%x iir=0x%x lsr=0x%x tx=%d output-owner=%u\n",
@@ -188,7 +197,7 @@ uartenable(void)
   if (!runtime_initialized || runtime_enabled || intr_get())
     panic("uart enable");
 
-  if (intc_shared_owner(UART0_IRQ, &owner) != MMIX_INTC_OK ||
+  if (intc_shared_owner(uart_config.interrupt, &owner) != MMIX_INTC_OK ||
       owner != (uint32)cpuid() ||
       intc_enabled(&enabled) != MMIX_INTC_OK ||
       (enabled & (1U << UART0_IRQ)) == 0)
