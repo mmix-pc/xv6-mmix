@@ -189,7 +189,7 @@ proc_clear(struct proc *p, int clear_context)
 static void
 proc_vm_tracking_valid_locked(struct proc *p)
 {
-  uint64 cpu_count = mmix_boot.info.cpu_count;
+  uint64 cpu_count = mmix_platform.topology.count;
   uint64 residents;
   uint64 valid_cpus;
 
@@ -367,7 +367,7 @@ proc_vm_commit_locked(struct proc *p, uint64 operation, uint64 start,
        (start != 0 || end != 0 || classes != VM_INVALIDATE_ALL)))
     panic("vm invalidation");
 
-  active_cpus = (1ULL << mmix_boot.info.cpu_count) - 1;
+  active_cpus = (1ULL << mmix_platform.topology.count) - 1;
   targets = __atomic_load_n(&p->vm_resident_cpus, __ATOMIC_RELAXED);
   if ((targets & ~active_cpus) != 0)
     panic("vm shootdown targets");
@@ -406,7 +406,7 @@ proc_vm_commit_locked(struct proc *p, uint64 operation, uint64 start,
   for (uint64 spin = 0;; spin++) {
     uint64 completed = 0;
 
-    for (uint32 target = 0; target < mmix_boot.info.cpu_count; target++) {
+    for (uint32 target = 0; target < mmix_platform.topology.count; target++) {
       if ((remote & (1ULL << target)) == 0)
         continue;
       if (__atomic_load_n(&vm_shootdown.acknowledged[target],

@@ -93,10 +93,9 @@ virtio_bswap32(uint32 value)
 static int
 virtio_platform_valid(void)
 {
-  return mmix_boot.bootinfo_status == MMIX_BOOTINFO_OK &&
-         mmix_boot.info.virtio_mmio_base == VIRTIO0_BASE &&
-         mmix_boot.info.virtio_mmio_irq == VIRTIO0_IRQ &&
-         mmix_boot.info.virtio_mmio_count == VIRTIO_MMIO_COUNT;
+  return mmix_platform.devices.virtio_count == VIRTIO_MMIO_COUNT &&
+         mmix_platform.devices.virtio[0].registers.start == VIRTIO0_BASE &&
+         mmix_platform.devices.virtio[0].interrupt == VIRTIO0_IRQ;
 }
 
 static volatile uint32 *
@@ -105,7 +104,8 @@ virtio_register(uint offset)
   if (!virtio_platform_valid() || (offset & (sizeof(uint32) - 1)) != 0 ||
       offset > VIRTIO0_SIZE - sizeof(uint32))
     panic("virtio register");
-  return (volatile uint32 *)(mmix_boot.info.virtio_mmio_base + offset);
+  return (volatile uint32 *)(
+    mmix_platform.devices.virtio[0].registers.start + offset);
 }
 
 // QEMU exposes modern VirtIO MMIO as little-endian 32-bit registers. A native

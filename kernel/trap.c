@@ -1,5 +1,6 @@
 #include "memlayout.h"
 #include "mmix.h"
+#include "boot.h"
 #include "cpu.h"
 #include "spinlock.h"
 #include "proc.h"
@@ -567,10 +568,8 @@ trapinithart(void)
   c->trap.user_trapframe = 0;
   if (mmix_trap_vector == 0)
     panic("trap state");
-  if (ro < BOOT_REGISTER_STACK_BASE(cpu_id) ||
-      ro >= BOOT_REGISTER_STACK_LIMIT(cpu_id) ||
-      rs < BOOT_REGISTER_STACK_BASE(cpu_id) ||
-      rs >= BOOT_REGISTER_STACK_LIMIT(cpu_id))
+  if (!boot_initial_register_stack_contains(cpu_id, ro) ||
+      !boot_initial_register_stack_contains(cpu_id, rs))
     panic("trap register stack");
   if (sp <= BOOT_STACK_BASE(cpu_id) + MMIX_TRAP_STACK_RESERVE ||
       sp > BOOT_STACK_TOP(cpu_id))

@@ -13,7 +13,7 @@
 //   0x000000000a800000 +----------------------------------+
 //                      | Stack Segment backing (64 MiB)   |
 //   0x000000000e800000 +----------------------------------+
-//                      | Platform RAM (8 MiB; boot info)  |
+//                      | Platform RAM (8 MiB)             |
 //   0x000000000f000000 +----------------------------------+
 //                      | Framebuffer backing (16 MiB)     |
 //   0x0000000010000000 +----------------------------------+ minimum RAM end
@@ -65,10 +65,6 @@
 #define PLATFORM_RAM_BASE 0x000000000e800000
 #define PLATFORM_RAM_SIZE 0x0000000000800000
 #define PLATFORM_RAM_END (PLATFORM_RAM_BASE + PLATFORM_RAM_SIZE)
-
-#define BOOTINFO_BASE 0x000000000e800000
-#define BOOTINFO_SIZE 0x0000000000000168
-#define BOOTINFO_END (BOOTINFO_BASE + BOOTINFO_SIZE)
 
 #define FRAMEBUFFER_BASE 0x000000000f000000
 #define FRAMEBUFFER_SIZE 0x0000000001000000
@@ -166,15 +162,6 @@
 #define KERNEL_ROOT_BLOCKS 3
 #define KERNEL_ROOT_SIZE (KERNEL_ROOT_BLOCKS * MMIX_PAGE_SIZE)
 #define KERNEL_ROOT_LIMIT (KERNEL_ROOT_BASE + KERNEL_ROOT_SIZE)
-
-#define REGISTER_STACK_BASE 0x0000000000010000
-#define REGISTER_STACK_LIMIT 0x0000000000100000
-#define BOOT_REGISTER_STACK_STRIDE 0x0000000000008000
-#define BOOT_REGISTER_STACK_SIZE BOOT_REGISTER_STACK_STRIDE
-#define BOOT_REGISTER_STACK_BASE(cpu_id)                                    \
-  (REGISTER_STACK_BASE + (cpu_id) * BOOT_REGISTER_STACK_STRIDE)
-#define BOOT_REGISTER_STACK_LIMIT(cpu_id)                                   \
-  (BOOT_REGISTER_STACK_BASE(cpu_id) + BOOT_REGISTER_STACK_SIZE)
 
 #define KERNEL_LOAD 0x0000000000100000
 #define KERNEL_ENTRY KERNEL_LOAD
@@ -318,8 +305,8 @@ _Static_assert(KERNEL_ROOT_BASE == MMIX_LOW_VECTOR_LIMIT,
                "kernel root tables must follow the low-vector page");
 _Static_assert(KERNEL_ROOT_SIZE == 0x6000,
                "kernel rV must reserve three root-table blocks");
-_Static_assert(KERNEL_ROOT_LIMIT <= REGISTER_STACK_BASE,
-               "kernel root tables must remain below the register stack");
+_Static_assert(KERNEL_ROOT_LIMIT <= KERNEL_LOAD,
+               "kernel root tables must remain below the kernel image");
 
 _Static_assert(LOW_RAM_END == POOL_PHYS_BASE,
                "Low RAM must end at Pool Segment backing");
@@ -341,10 +328,6 @@ _Static_assert(PLATFORM_RAM_END == FRAMEBUFFER_BASE,
                "platform RAM must end at the framebuffer");
 _Static_assert(FRAMEBUFFER_END == MMIO_BASE,
                "framebuffer memory must end at MMIO");
-_Static_assert(BOOTINFO_BASE >= PLATFORM_RAM_BASE &&
-                   BOOTINFO_END <= PLATFORM_RAM_END,
-               "boot info must fit in platform RAM");
-
 _Static_assert(UART0_BASE >= MMIO_BASE &&
                    UART0_BASE + UART0_SIZE <= VIRTIO0_BASE,
                "UART MMIO range must not overlap VirtIO");
@@ -376,11 +359,6 @@ _Static_assert(IPI_BASE + IPI_SIZE <= MMIO_DEVICE_PAGE_END &&
 
 _Static_assert((KERNEL_LOAD & (MMIX_PAGE_SIZE - 1)) == 0,
                "kernel load address must be page-aligned");
-_Static_assert((REGISTER_STACK_BASE & 7) == 0 &&
-                   REGISTER_STACK_BASE < REGISTER_STACK_LIMIT,
-               "register-stack backing range must be valid and octa-aligned");
-_Static_assert(KERNEL_LOAD == REGISTER_STACK_LIMIT,
-               "kernel must follow the reserved register-stack range");
 _Static_assert(KERNEL_LIMIT == KALLOC_LOW_LIMIT &&
                    KALLOC_LOW_LIMIT == BOOT_STACK_AREA_BASE,
                "kernel limit must stop at the bootstrap stacks");
@@ -398,10 +376,6 @@ _Static_assert(BOOT_STACK_AREA_TOP == LOW_RAM_END &&
                    BOOT_STACK_TOP(MMIX_MAX_CPUS - 1) ==
                      BOOT_STACK_AREA_BASE + BOOT_STACK_SIZE,
                "bootstrap stack geometry is invalid");
-_Static_assert(BOOT_REGISTER_STACK_BASE(0) == REGISTER_STACK_BASE &&
-                   BOOT_REGISTER_STACK_LIMIT(MMIX_MAX_CPUS - 1) <=
-                     REGISTER_STACK_LIMIT,
-               "initial register stacks exceed their reserved range");
 _Static_assert(MMIX_CONTEXT_AREA_TOP == 0x0000080000000000 &&
                  MMIX_CONTEXT_AREA_BASE == 0x000007ffffce0000,
                "kernel context window must match the scheduler ABI");

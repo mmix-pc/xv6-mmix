@@ -36,6 +36,14 @@ static struct {
   struct kalloc_zone zone[KALLOC_ZONE_COUNT];
 } kmem;
 
+static uint64
+high_ram_size(void)
+{
+  return mmix_platform.memory.ram_size > PHYSICAL_LOW_RAM_SIZE
+           ? mmix_platform.memory.ram_size - PHYSICAL_LOW_RAM_SIZE
+           : 0;
+}
+
 _Static_assert((100 * 1024 * 1024) % PGSIZE == 0,
                "eager allocation budget must use whole pages");
 _Static_assert(KALLOC_RECLAIMED_PAGES >= KALLOC_EAGER_BUDGET_PAGES,
@@ -44,9 +52,6 @@ _Static_assert(KALLOC_RECLAIMED_PAGES >= KALLOC_EAGER_BUDGET_PAGES,
 static int
 zone_bounds(int zone, uint64 *start, uint64 *limit)
 {
-  const struct mmix_physical_range *high =
-    &boot_physical_memory()->range[MMIX_PHYSICAL_RAM_HIGH];
-
   if (zone == KALLOC_LOW_ZONE) {
     *start = KALLOC_START((uint64)kernel_end);
     *limit = KALLOC_LOW_LIMIT;
@@ -54,8 +59,8 @@ zone_bounds(int zone, uint64 *start, uint64 *limit)
     *start = KALLOC_RECLAIMED_START;
     *limit = KALLOC_RECLAIMED_LIMIT;
   } else if (zone == KALLOC_HIGH_ZONE) {
-    *start = high->base;
-    *limit = high->base + high->size;
+    *start = PHYSICAL_HIGH_RAM_BASE;
+    *limit = PHYSICAL_HIGH_RAM_BASE + high_ram_size();
   } else {
     return -1;
   }
@@ -120,7 +125,7 @@ allocator_audit_locked(void)
                       (LOW_RAM_END - KALLOC_LOW_LIMIT) / PGSIZE +
                       (PHYSICAL_LOW_RAM_END - KALLOC_RECLAIMED_LIMIT) /
                         PGSIZE;
-    uint64 physical = boot_physical_memory()->total_size / PGSIZE;
+    uint64 physical = mmix_platform.memory.ram_size / PGSIZE;
 
     if (managed > physical || physical - managed != reserved)
       panic("kalloc topology");
@@ -205,12 +210,12 @@ kinit_reclaimed(void)
 void
 kinit_high(void)
 {
-  const struct mmix_physical_range *high =
-    &boot_physical_memory()->range[MMIX_PHYSICAL_RAM_HIGH];
+  uint64 high_size = high_ram_size();
 
   if (mmix_rv_read() != MMIX_KERNEL_RV)
     panic("kinit high");
-  publish_zone(KALLOC_HIGH_ZONE, high->base, high->base + high->size,
+  publish_zone(KALLOC_HIGH_ZONE, PHYSICAL_HIGH_RAM_BASE,
+               PHYSICAL_HIGH_RAM_BASE + high_size,
                "kinit high", "kinit high twice");
 }
 
@@ -426,7 +431,7 @@ kalloc_get_stats(struct kalloc_stats *stats)
 
   acquire(&kmem.lock);
   allocator_audit_locked();
-  stats->physical_pages = boot_physical_memory()->total_size / PGSIZE;
+  stats->physical_pages = mmix_platform.memory.ram_size / PGSIZE;
   stats->managed_pages = 0;
   stats->free_pages = 0;
   for (int zone = 0; zone < KALLOC_ZONE_COUNT; zone++) {

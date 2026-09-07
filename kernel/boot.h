@@ -2,7 +2,6 @@
 #define XV6_MMIX_BOOT_H
 
 #include "types.h"
-#include "bootinfo.h"
 #include "memlayout.h"
 #include "platform.h"
 
@@ -16,14 +15,6 @@ struct mmix_boot_handoff {
   uint64 entry_rs;
   uint64 software_stack_base;
   uint64 software_stack_top;
-};
-
-// State retained by the minimal MMIX boot path for early diagnostics.
-struct mmix_boot_state {
-  uint64 startup_cpu_id;
-  uint64 bootinfo_pa;
-  int bootinfo_status;
-  struct mmix_bootinfo info;
 };
 
 enum mmix_startup_state {
@@ -53,7 +44,6 @@ enum mmix_cpu_startup_stage {
 
 enum mmix_startup_failure {
   MMIX_STARTUP_FAILURE_NONE = 0,
-  MMIX_STARTUP_FAILURE_BOOTINFO = 1,
   MMIX_STARTUP_FAILURE_DUPLICATE_ARRIVAL = 2,
   MMIX_STARTUP_FAILURE_TOPOLOGY = 3,
   MMIX_STARTUP_FAILURE_GENERATION = 4,
@@ -88,17 +78,22 @@ struct mmix_startup_control {
   uint64 interrupt_ready;
 };
 
-extern struct mmix_boot_state mmix_boot;
 extern struct platform mmix_platform;
 extern uint64 mmix_fdt_address;
 extern struct mmix_boot_handoff mmix_boot_handoffs[];
 extern struct mmix_startup_control mmix_startup;
 
-// Valid after bootinfo_status reports a successful decode.
-static inline const struct mmix_physical_memory *
-boot_physical_memory(void)
+static inline int
+boot_initial_register_stack_contains(uint64 cpu_id, uint64 address)
 {
-  return &mmix_boot.info.memory;
+  const struct platform_cpu *cpu;
+
+  if (cpu_id >= mmix_platform.topology.count)
+    return 0;
+  cpu = &mmix_platform.topology.cpus[cpu_id];
+  return address >= cpu->initial_register_stack &&
+         address - cpu->initial_register_stack <
+           cpu->initial_register_stack_size;
 }
 
 void start(uint64 startup_cpu_id, uint64 fdt_address, uint64 entry_rl,

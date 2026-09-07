@@ -33,19 +33,20 @@ static uint32 ipi_send_lock;
 static uint64
 ipi_active_targets(void)
 {
-  return (1ULL << mmix_boot.info.ipi_target_count) - 1;
+  return (1ULL << mmix_platform.devices.ipi.context_count) - 1;
 }
 
 static volatile uint64 *
 ipi_register(uint64 offset)
 {
-  return (volatile uint64 *)(mmix_boot.info.ipi_base + offset);
+  return (volatile uint64 *)(mmix_platform.devices.ipi.global.start + offset);
 }
 
 static uint64
 ipi_context_register(uint32 target, uint64 offset)
 {
-  return MMIX_IPI_CONTEXT_BASE +
+  return mmix_platform.devices.ipi.contexts.start -
+           mmix_platform.devices.ipi.global.start +
          (uint64)target * MMIX_IPI_CONTEXT_STRIDE + offset;
 }
 
@@ -64,15 +65,16 @@ ipi_write(uint64 offset, uint64 value)
 static int
 ipi_platform_valid(void)
 {
-  const struct mmix_bootinfo *info = &mmix_boot.info;
+  const struct platform_ipi *ipi = &mmix_platform.devices.ipi;
 
-  return mmix_boot.bootinfo_status == MMIX_BOOTINFO_OK &&
-         (info->ipi_base & (MMIX_IPI_REGISTER_SIZE - 1)) == 0 &&
-         info->boot_cpu_id == BOOT_CPU_ID && info->cpu_count > 0 &&
-         info->cpu_count <= MMIX_MAX_CPUS &&
-         info->ipi_target_count == info->cpu_count &&
-         info->ipi_target_count <= IPI_TARGET_COUNT_MAX &&
-         info->ipi_request_mask == MMIX_RQ_IPI &&
+  return (ipi->global.start & (MMIX_IPI_REGISTER_SIZE - 1)) == 0 &&
+         ipi->contexts.start == ipi->global.start + MMIX_IPI_CONTEXT_BASE &&
+         ipi->context_stride == MMIX_IPI_CONTEXT_STRIDE &&
+         mmix_platform.topology.count > 0 &&
+         mmix_platform.topology.count <= MMIX_MAX_CPUS &&
+         ipi->context_count == mmix_platform.topology.count &&
+         ipi->context_count <= IPI_TARGET_COUNT_MAX &&
+         ipi->request_bit == MMIX_RQ_IPI &&
          ipi_read(MMIX_IPI_ACTIVE_OFFSET) == ipi_active_targets();
 }
 
@@ -82,14 +84,14 @@ ipi_current_valid(void)
   int id = cpuid();
 
   return ipi_platform_valid() && id >= 0 &&
-         (uint64)id < mmix_boot.info.ipi_target_count;
+         (uint64)id < mmix_platform.devices.ipi.context_count;
 }
 
 static int
 ipi_target_valid(uint32 target)
 {
   return ipi_platform_valid() &&
-         (uint64)target < mmix_boot.info.ipi_target_count;
+         (uint64)target < mmix_platform.devices.ipi.context_count;
 }
 
 static int
@@ -167,7 +169,8 @@ ipi_send(uint64 targets, uint64 *generation)
     return status;
   }
 
-  for (uint32 target = 0; target < mmix_boot.info.ipi_target_count; target++) {
+  for (uint32 target = 0;
+       target < mmix_platform.devices.ipi.context_count; target++) {
     if ((targets & (1ULL << target)) == 0)
       continue;
     __atomic_store_n(&ipi_targets[target].requested, allocated,
@@ -203,7 +206,7 @@ ipi_send_work(uint64 targets, uint64 classes, uint64 work_generation,
 
   while (__atomic_exchange_n(&ipi_send_lock, 1, __ATOMIC_ACQUIRE) != 0)
     ;
-  for (uint32 id = 0; id < mmix_boot.info.ipi_target_count; id++) {
+  for (uint32 id = 0; id < mmix_platform.devices.ipi.context_count; id++) {
     if ((targets & (1ULL << id)) == 0)
       continue;
     target = &ipi_targets[id];
@@ -222,7 +225,7 @@ ipi_send_work(uint64 targets, uint64 classes, uint64 work_generation,
     return status;
   }
 
-  for (uint32 id = 0; id < mmix_boot.info.ipi_target_count; id++) {
+  for (uint32 id = 0; id < mmix_platform.devices.ipi.context_count; id++) {
     if ((targets & (1ULL << id)) == 0)
       continue;
     target = &ipi_targets[id];

@@ -51,8 +51,8 @@ SECTIONS
          "kernel root tables are not page-aligned")
   ASSERT(kernel_root_tables_end - kernel_root_tables_start == 0x6000,
          "kernel root table reservation has the wrong size")
-  ASSERT(kernel_root_tables_end <= 0x00010000,
-         "kernel root tables overlap the register stack")
+  ASSERT(kernel_root_tables_end <= 0x00100000,
+         "kernel root tables overlap the kernel image")
   ASSERT(kernel_text_end > 0x00100000,
          "kernel text is empty")
   ASSERT((mmix_kernel_trap_entry & 0xf) == 0 &&
@@ -90,10 +90,6 @@ SECTIONS
   ASSERT(kernel_boot_stacks_start + 1024 <
              kernel_boot_stacks_start + 0x2000,
          "a bootstrap stack cannot hold the MMIX trap path")
-  ASSERT(0x00008000 <= 0x00010000 &&
-             0x00010000 + 16 * 0x00008000 <= 0x00100000,
-         "MMIX register-stack backing range is invalid")
-
   /DISCARD/ : {
     *(.comment)
     *(.note.GNU-stack)

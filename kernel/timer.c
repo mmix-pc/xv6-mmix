@@ -26,17 +26,21 @@ static uint64 tick_count[MMIX_MAX_CPUS];
 static int
 timer_platform_valid(void)
 {
-  const struct mmix_bootinfo *info = &mmix_boot.info;
+  const struct platform_timer *timer = &mmix_platform.devices.timer;
+  const struct platform_interrupt_controller *intc =
+    &mmix_platform.devices.interrupt_controller;
 
-  return mmix_boot.bootinfo_status == MMIX_BOOTINFO_OK &&
-         (info->timer_base & (MMIX_TIMER_REGISTER_SIZE - 1)) == 0 &&
-         info->boot_cpu_id == BOOT_CPU_ID &&
-         info->timer_irq_base == MMIX_TIMER_IRQ &&
-         info->timer_irq_count == info->cpu_count &&
-         info->timer_irq_count <= TIMER_IRQ_COUNT_MAX &&
-         info->timer_irq_base < info->intc_irq_count &&
-         info->timer_irq_count <=
-           info->intc_irq_count - info->timer_irq_base;
+  if ((timer->global.start & (MMIX_TIMER_REGISTER_SIZE - 1)) != 0 ||
+      timer->contexts.start != timer->global.start + MMIX_TIMER_CONTEXT_BASE ||
+      timer->context_stride != MMIX_TIMER_CONTEXT_STRIDE ||
+      timer->context_count != mmix_platform.topology.count ||
+      timer->context_count > TIMER_IRQ_COUNT_MAX)
+    return 0;
+  for (uint32 id = 0; id < timer->context_count; id++)
+    if (timer->interrupts[id] != MMIX_TIMER_IRQ + id ||
+        timer->interrupts[id] >= intc->source_count)
+      return 0;
+  return 1;
 }
 
 static int
@@ -45,19 +49,20 @@ timer_current_valid(void)
   int id = cpuid();
 
   return timer_platform_valid() && id >= 0 &&
-         (uint64)id < mmix_boot.info.cpu_count;
+         (uint64)id < mmix_platform.topology.count;
 }
 
 static volatile uint64 *
 timer_register(uint64 offset)
 {
-  return (volatile uint64 *)(mmix_boot.info.timer_base + offset);
+  return (volatile uint64 *)(mmix_platform.devices.timer.global.start + offset);
 }
 
 static uint64
 timer_context_register(uint64 offset)
 {
-  return MMIX_TIMER_CONTEXT_BASE +
+  return mmix_platform.devices.timer.contexts.start -
+           mmix_platform.devices.timer.global.start +
          (uint64)cpuid() * MMIX_TIMER_CONTEXT_STRIDE + offset;
 }
 
@@ -86,7 +91,7 @@ timer_irq(uint32 *irq)
     return MMIX_TIMER_BAD_ARGUMENT;
   if (!timer_current_valid())
     return MMIX_TIMER_BAD_PLATFORM;
-  *irq = mmix_boot.info.timer_irq_base + (uint32)cpuid();
+  *irq = mmix_platform.devices.timer.interrupts[cpuid()];
   return MMIX_TIMER_OK;
 }
 

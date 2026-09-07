@@ -12,7 +12,6 @@
 
 void main(void) __attribute__((noreturn));
 
-struct mmix_boot_state mmix_boot;
 struct platform mmix_platform;
 uint64 mmix_fdt_address;
 struct mmix_boot_handoff mmix_boot_handoffs[MMIX_MAX_CPUS];
@@ -336,7 +335,7 @@ boot_publish_interrupt_ready(void)
   uint32 timer_irq_number;
   struct cpu *c = mycpu();
 
-  if (cpu_id >= mmix_boot.info.cpu_count || c != &cpus[cpu_id] ||
+  if (cpu_id >= mmix_platform.topology.count || c != &cpus[cpu_id] ||
       timer_irq(&timer_irq_number) != MMIX_TIMER_OK ||
       intc_enabled(&enabled) != MMIX_INTC_OK || !intr_get())
     goto fail;
@@ -375,7 +374,7 @@ fail:
 int
 boot_wait_for_interrupt_ready(void)
 {
-  uint64 cpu_count = mmix_boot.info.cpu_count;
+  uint64 cpu_count = mmix_platform.topology.count;
   uint64 expected_mask = startup_expected_mask(cpu_count);
 
   if (cpuid() != BOOT_CPU_ID ||
@@ -425,7 +424,7 @@ fail:
 int
 boot_release_schedulers(void)
 {
-  uint64 cpu_count = mmix_boot.info.cpu_count;
+  uint64 cpu_count = mmix_platform.topology.count;
   uint64 expected_mask = startup_expected_mask(cpu_count);
 
   if (cpuid() != BOOT_CPU_ID || intr_get() || mycpu()->proc != 0 ||
@@ -460,7 +459,7 @@ boot_wait_for_scheduler_release(void)
 {
   uint64 cpu_id = cpuid();
 
-  if (cpu_id == BOOT_CPU_ID || cpu_id >= mmix_boot.info.cpu_count ||
+  if (cpu_id == BOOT_CPU_ID || cpu_id >= mmix_platform.topology.count ||
       !intr_get() ||
       __atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
                       __ATOMIC_ACQUIRE) != MMIX_CPU_STAGE_SECONDARY_IDLE)
@@ -490,7 +489,7 @@ boot_publish_scheduler_ready(void)
   uint64 expected_stage = cpu_id == BOOT_CPU_ID ?
     MMIX_CPU_STAGE_SERVICE : MMIX_CPU_STAGE_SECONDARY_IDLE;
 
-  if (cpu_id >= mmix_boot.info.cpu_count || c != &cpus[cpu_id] ||
+  if (cpu_id >= mmix_platform.topology.count || c != &cpus[cpu_id] ||
       __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
         MMIX_STARTUP_SCHEDULER_RELEASED ||
       c->proc != 0 || c->scheduler_entries != 1 ||

@@ -26,14 +26,17 @@ static uint32 intc_active_claim[MMIX_MAX_CPUS];
 static int
 intc_platform_valid(void)
 {
-  const struct mmix_bootinfo *info = &mmix_boot.info;
+  const struct platform_interrupt_controller *intc =
+    &mmix_platform.devices.interrupt_controller;
 
-  return mmix_boot.bootinfo_status == MMIX_BOOTINFO_OK &&
-         (info->intc_base & (MMIX_INTC_REGISTER_SIZE - 1)) == 0 &&
-         info->boot_cpu_id == BOOT_CPU_ID && info->cpu_count > 0 &&
-         info->cpu_count <= MMIX_MAX_CPUS &&
-         info->intc_irq_count > 1 &&
-         info->intc_irq_count <= MMIX_INTC_MAX_IRQ_COUNT;
+  return (intc->global.start & (MMIX_INTC_REGISTER_SIZE - 1)) == 0 &&
+         intc->contexts.start == intc->global.start + MMIX_INTC_CONTEXT_BASE &&
+         intc->context_stride == MMIX_INTC_CONTEXT_STRIDE &&
+         mmix_platform.topology.count > 0 &&
+         mmix_platform.topology.count <= MMIX_MAX_CPUS &&
+         intc->context_count == mmix_platform.topology.count &&
+         intc->source_count > 1 &&
+         intc->source_count <= MMIX_INTC_MAX_IRQ_COUNT;
 }
 
 static int
@@ -42,26 +45,28 @@ intc_current_valid(void)
   int id = cpuid();
 
   return intc_platform_valid() && id >= 0 &&
-         (uint64)id < mmix_boot.info.cpu_count;
+         (uint64)id < mmix_platform.topology.count;
 }
 
 static int
 intc_irq_valid(uint32 irq)
 {
   return intc_platform_valid() && irq != 0 &&
-         irq < mmix_boot.info.intc_irq_count;
+         irq < mmix_platform.devices.interrupt_controller.source_count;
 }
 
 static volatile uint32 *
 intc_register(uint64 offset)
 {
-  return (volatile uint32 *)(mmix_boot.info.intc_base + offset);
+  return (volatile uint32 *)(
+    mmix_platform.devices.interrupt_controller.global.start + offset);
 }
 
 static uint64
 intc_context_register(uint64 offset)
 {
-  return MMIX_INTC_CONTEXT_BASE +
+  return mmix_platform.devices.interrupt_controller.contexts.start -
+           mmix_platform.devices.interrupt_controller.global.start +
          (uint64)cpuid() * MMIX_INTC_CONTEXT_STRIDE + offset;
 }
 
@@ -80,7 +85,7 @@ intc_write(uint64 offset, uint32 value)
 static int
 intc_affinity_valid(void)
 {
-  uint64 cpu_count = mmix_boot.info.cpu_count;
+  uint64 cpu_count = mmix_platform.topology.count;
   uint64 uart_owner;
   uint64 virtio_owner;
 
@@ -102,7 +107,7 @@ intc_current_owns(uint32 irq)
 
   if (!intc_current_valid() || !intc_affinity_valid())
     return 0;
-  if (irq == mmix_boot.info.timer_irq_base + id)
+  if (irq == mmix_platform.devices.timer.interrupts[id])
     return 1;
   if (irq == UART0_IRQ)
     return __atomic_load_n(&intc_affinity.uart_owner,
@@ -151,7 +156,7 @@ intc_publish_affinity(void)
   __atomic_store_n(&intc_affinity.uart_owner, BOOT_CPU_ID,
                    __ATOMIC_RELAXED);
   __atomic_store_n(&intc_affinity.virtio_owner,
-                   mmix_boot.info.cpu_count > 1 ? 1 : BOOT_CPU_ID,
+                   mmix_platform.topology.count > 1 ? 1 : BOOT_CPU_ID,
                    __ATOMIC_RELAXED);
   __atomic_store_n(&intc_affinity.generation,
                    MMIX_INTC_AFFINITY_GENERATION, __ATOMIC_RELEASE);
@@ -226,7 +231,7 @@ intc_shared_owner(uint32 irq, uint32 *owner)
                                __ATOMIC_RELAXED);
   else
     return MMIX_INTC_BAD_IRQ;
-  if (selected >= mmix_boot.info.cpu_count)
+  if (selected >= mmix_platform.topology.count)
     return MMIX_INTC_BAD_STATE;
   *owner = (uint32)selected;
   return MMIX_INTC_OK;
@@ -244,7 +249,7 @@ intc_runtime_mask(uint32 timer_irq, uint32 *mask)
     return MMIX_INTC_BAD_ARGUMENT;
   if (!intc_current_valid() || !intc_affinity_valid())
     return MMIX_INTC_BAD_PLATFORM;
-  expected_timer = mmix_boot.info.timer_irq_base + (uint32)id;
+  expected_timer = mmix_platform.devices.timer.interrupts[id];
   if (timer_irq != expected_timer || !intc_irq_valid(timer_irq) ||
       intc_shared_owner(UART0_IRQ, &uart_owner) != MMIX_INTC_OK ||
       intc_shared_owner(VIRTIO0_IRQ, &virtio_owner) != MMIX_INTC_OK)

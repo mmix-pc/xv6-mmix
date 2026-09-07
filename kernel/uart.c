@@ -134,9 +134,8 @@ uartinit(void)
 {
   if (runtime_initialized || runtime_enabled ||
       intr_get() ||
-      mmix_boot.bootinfo_status != MMIX_BOOTINFO_OK ||
-      mmix_boot.info.uart_base != UART0_BASE ||
-      mmix_boot.info.uart_irq != UART0_IRQ)
+      mmix_platform.devices.uart.registers.start != UART0_BASE ||
+      mmix_platform.devices.uart.interrupt != UART0_IRQ)
     panic("uart init");
   if (uart_read(UART_LCR) != UART_LCR_EIGHT_BITS)
     panic("uart state");
