@@ -4,16 +4,18 @@
 #include "types.h"
 #include "bootinfo.h"
 #include "memlayout.h"
+#include "platform.h"
 
 // Immutable entry data retained separately before the SMP startup barrier can
 // publish the canonical boot description.
 struct mmix_boot_handoff {
   uint64 startup_cpu_id;
-  uint64 bootinfo_pa;
+  uint64 fdt_address;
+  uint64 entry_rl;
+  uint64 entry_ro;
+  uint64 entry_rs;
   uint64 software_stack_base;
   uint64 software_stack_top;
-  uint64 register_stack_base;
-  uint64 register_stack_limit;
 };
 
 // State retained by the minimal MMIX boot path for early diagnostics.
@@ -60,6 +62,10 @@ enum mmix_startup_failure {
   MMIX_STARTUP_FAILURE_DUPLICATE_ONLINE = 7,
   MMIX_STARTUP_FAILURE_DUPLICATE_CONTEXT = 8,
   MMIX_STARTUP_FAILURE_DUPLICATE_INTERRUPT_READY = 9,
+  MMIX_STARTUP_FAILURE_ENTRY_RL = 10,
+  MMIX_STARTUP_FAILURE_FDT = 11,
+  MMIX_STARTUP_FAILURE_REGISTER_STACK = 12,
+  MMIX_STARTUP_FAILURE_PLATFORM = 13,
 };
 
 #define MMIX_STARTUP_GENERATION 1
@@ -76,12 +82,15 @@ struct mmix_startup_control {
   uint64 global_initializer_count;
   uint64 failure;
   uint64 ready_cookie;
+  uint64 platform_publications;
   uint64 cpu_stage[MMIX_MAX_CPUS];
   uint64 context_transfers[MMIX_MAX_CPUS];
   uint64 interrupt_ready;
 };
 
 extern struct mmix_boot_state mmix_boot;
+extern struct platform mmix_platform;
+extern uint64 mmix_fdt_address;
 extern struct mmix_boot_handoff mmix_boot_handoffs[];
 extern struct mmix_startup_control mmix_startup;
 
@@ -92,9 +101,9 @@ boot_physical_memory(void)
   return &mmix_boot.info.memory;
 }
 
-void start(uint64 startup_cpu_id, uint64 bootinfo_pa)
+void start(uint64 startup_cpu_id, uint64 fdt_address, uint64 entry_rl,
+           uint64 entry_ro, uint64 entry_rs)
     __attribute__((noreturn));
-int boot_publish_global_ready(void);
 int boot_wait_for_online(void);
 int boot_publish_interrupt_ready(void);
 int boot_wait_for_interrupt_ready(void);
@@ -102,12 +111,12 @@ int boot_release_schedulers(void);
 int boot_wait_for_scheduler_release(void);
 int boot_publish_scheduler_ready(void);
 
-_Static_assert(sizeof(struct mmix_boot_handoff) == 6 * sizeof(uint64),
+_Static_assert(sizeof(struct mmix_boot_handoff) == 7 * sizeof(uint64),
                "unexpected MMIX boot handoff size");
 _Static_assert(__alignof__(struct mmix_startup_control) == sizeof(uint64),
                "startup control must be octa-aligned");
 _Static_assert(sizeof(struct mmix_startup_control) ==
-                 (9 + 2 * MMIX_MAX_CPUS) * sizeof(uint64),
+                 (10 + 2 * MMIX_MAX_CPUS) * sizeof(uint64),
                "unexpected startup control size");
 
 #endif

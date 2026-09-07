@@ -33,6 +33,8 @@ struct mmix_trap_diagnostic {
 };
 
 void diagnostic_boot(const struct mmix_boot_state *boot);
+void diagnostic_startup_failure(uint64, int);
+void diagnostic_platform_checkpoint(void);
 void diagnostic_allocator(const struct kalloc_stats *stats);
 void diagnostic_paging(uint64 rv);
 void diagnostic_startup(uint64 cpu_count, uint64 online);

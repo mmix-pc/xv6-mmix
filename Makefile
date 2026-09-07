@@ -79,7 +79,7 @@ $K/%.o: $K/%.S
 
 QEMUMEM ?= 256M
 
-QEMUOPTS = -machine virt
+QEMUOPTS = -machine virt,elf-startup-abi=linux
 QEMUOPTS += -smp 1
 QEMUOPTS += -m $(QEMUMEM)
 QEMUOPTS += -display none

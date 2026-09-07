@@ -128,6 +128,64 @@ diagnostic_boot(const struct mmix_boot_state *boot)
 }
 
 void
+diagnostic_startup_failure(uint64 failure, int decode_status)
+{
+  diagnostic_puts("platform startup failure: code=");
+  diagnostic_put_u64(failure);
+  diagnostic_puts(" decode-status=");
+  diagnostic_put_int(decode_status);
+  diagnostic_putc('\n');
+}
+
+void
+diagnostic_platform_checkpoint(void)
+{
+  uint64 cpu_count = mmix_platform.topology.count;
+
+  diagnostic_puts("xv6 MMIX platform checkpoint\n");
+  diagnostic_puts("platform: generation=");
+  diagnostic_put_u64(mmix_startup.generation);
+  diagnostic_puts(" publications=");
+  diagnostic_put_u64(mmix_startup.platform_publications);
+  diagnostic_puts(" fdt=");
+  diagnostic_put_hex64(mmix_fdt_address);
+  diagnostic_puts(" cpus=");
+  diagnostic_put_u64(cpu_count);
+  diagnostic_putc('\n');
+  diagnostic_puts("platform: arrived=");
+  diagnostic_put_hex64(mmix_startup.arrived);
+  diagnostic_puts(" online=");
+  diagnostic_put_hex64(mmix_startup.online);
+  diagnostic_putc('\n');
+  for (uint64 cpu_id = 0; cpu_id < cpu_count; cpu_id++) {
+    const struct mmix_boot_handoff *handoff = &mmix_boot_handoffs[cpu_id];
+
+    diagnostic_puts("entry: cpu=");
+    diagnostic_put_u64(cpu_id);
+    diagnostic_puts(" fdt=");
+    diagnostic_put_hex64(handoff->fdt_address);
+    diagnostic_puts(" rl=");
+    diagnostic_put_u64(handoff->entry_rl);
+    diagnostic_puts(" ro=");
+    diagnostic_put_hex64(handoff->entry_ro);
+    diagnostic_puts(" rs=");
+    diagnostic_put_hex64(handoff->entry_rs);
+    diagnostic_puts(" stack=[");
+    diagnostic_put_hex64(handoff->software_stack_base);
+    diagnostic_puts(", ");
+    diagnostic_put_hex64(handoff->software_stack_top);
+    diagnostic_puts(") stage=");
+    diagnostic_put_u64(mmix_startup.cpu_stage[cpu_id]);
+    diagnostic_putc('\n');
+  }
+  diagnostic_puts("PLATFORM CHECKPOINT PASS cpus=");
+  diagnostic_put_u64(cpu_count);
+  diagnostic_puts(" generation=");
+  diagnostic_put_u64(mmix_startup.generation);
+  diagnostic_putc('\n');
+}
+
+void
 diagnostic_allocator(const struct kalloc_stats *stats)
 {
   diagnostic_puts("allocator: physical-pages=");

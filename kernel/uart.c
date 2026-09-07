@@ -38,6 +38,8 @@ enum {
   UART_LSR_THR_EMPTY = 1 << 5,
 };
 
+#define EARLY_UART_ALIAS 0x8001000010000000UL
+
 static struct spinlock tx_lock;
 static int tx_busy;
 static int tx_chan;
@@ -58,31 +60,43 @@ uart_write(uint64 offset, uint8 value)
   *(volatile uint8 *)(UART0_BASE + offset) = value;
 }
 
+static __attribute__((always_inline)) inline uint8
+early_uart_read(uint64 offset)
+{
+  return *(volatile uint8 *)(EARLY_UART_ALIAS + offset);
+}
+
+static __attribute__((always_inline)) inline void
+early_uart_write(uint64 offset, uint8 value)
+{
+  *(volatile uint8 *)(EARLY_UART_ALIAS + offset) = value;
+}
+
 void
 early_uart_init(void)
 {
   // Keep all UART interrupt sources disabled during early boot.
-  uart_write(UART_IER, 0);
+  early_uart_write(UART_IER, 0);
 
   // QEMU's 115200 baud base and divisor 1 select 115200 baud.
-  uart_write(UART_LCR, UART_LCR_DLAB);
-  uart_write(UART_DLL, 1);
-  uart_write(UART_DLM, 0);
+  early_uart_write(UART_LCR, UART_LCR_DLAB);
+  early_uart_write(UART_DLL, 1);
+  early_uart_write(UART_DLM, 0);
 
   // Select 8 data bits, one stop bit, and no parity, then reset both FIFOs.
-  uart_write(UART_LCR, UART_LCR_EIGHT_BITS);
-  uart_write(UART_FCR, UART_FCR_FIFO_ENABLE | UART_FCR_RX_CLEAR |
-                           UART_FCR_TX_CLEAR);
-  uart_write(UART_IER, 0);
+  early_uart_write(UART_LCR, UART_LCR_EIGHT_BITS);
+  early_uart_write(UART_FCR, UART_FCR_FIFO_ENABLE | UART_FCR_RX_CLEAR |
+                                 UART_FCR_TX_CLEAR);
+  early_uart_write(UART_IER, 0);
 }
 
 static void
 early_uart_putc(int c)
 {
-  while ((uart_read(UART_LSR) & UART_LSR_THR_EMPTY) == 0)
+  while ((early_uart_read(UART_LSR) & UART_LSR_THR_EMPTY) == 0)
     ;
 
-  uart_write(UART_THR, (uint8)c);
+  early_uart_write(UART_THR, (uint8)c);
 }
 
 // Serialize every normal THR writer, including synchronous diagnostics and
@@ -243,10 +257,10 @@ uartpanic(void)
       expected != owner)
     for (;;)
       ;
-  uart_write(UART_IER, 0);
+  early_uart_write(UART_IER, 0);
   while (__atomic_load_n(&output_owner, __ATOMIC_ACQUIRE) != 0)
     ;
-  while ((uart_read(UART_LSR) & UART_LSR_THR_EMPTY) == 0)
+  while ((early_uart_read(UART_LSR) & UART_LSR_THR_EMPTY) == 0)
     ;
 }
 
