@@ -10,9 +10,6 @@
 #include "spinlock.h"
 #include "defs.h"
 
-// FIXME: Remove after the allocator adopts the platform query interface.
-extern struct platform mmix_platform;
-
 extern char kernel_end[]; // First address after the loaded kernel.
                           // Defined by kernel.ld.
 
@@ -41,10 +38,22 @@ static struct {
 } kmem;
 
 static uint64
+physical_ram_size(void)
+{
+  struct platform_physical_range ram;
+
+  if (platform_ram(&ram) != PLATFORM_OK)
+    panic("kalloc platform");
+  return ram.size;
+}
+
+static uint64
 high_ram_size(void)
 {
-  return mmix_platform.memory.ram_size > PHYSICAL_LOW_RAM_SIZE
-           ? mmix_platform.memory.ram_size - PHYSICAL_LOW_RAM_SIZE
+  uint64 ram_size = physical_ram_size();
+
+  return ram_size > PHYSICAL_LOW_RAM_SIZE
+           ? ram_size - PHYSICAL_LOW_RAM_SIZE
            : 0;
 }
 
@@ -129,7 +138,7 @@ allocator_audit_locked(void)
                       (LOW_RAM_END - KALLOC_LOW_LIMIT) / PGSIZE +
                       (PHYSICAL_LOW_RAM_END - KALLOC_RECLAIMED_LIMIT) /
                         PGSIZE;
-    uint64 physical = mmix_platform.memory.ram_size / PGSIZE;
+    uint64 physical = physical_ram_size() / PGSIZE;
 
     if (managed > physical || physical - managed != reserved)
       panic("kalloc topology");
@@ -435,7 +444,7 @@ kalloc_get_stats(struct kalloc_stats *stats)
 
   acquire(&kmem.lock);
   allocator_audit_locked();
-  stats->physical_pages = mmix_platform.memory.ram_size / PGSIZE;
+  stats->physical_pages = physical_ram_size() / PGSIZE;
   stats->managed_pages = 0;
   stats->free_pages = 0;
   for (int zone = 0; zone < KALLOC_ZONE_COUNT; zone++) {

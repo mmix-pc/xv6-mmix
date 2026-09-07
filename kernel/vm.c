@@ -8,9 +8,6 @@
 #include "proc.h"
 #include "vm.h"
 
-// FIXME: Remove after VM adopts the platform query interface.
-extern struct platform mmix_platform;
-
 #define MMIX_PT_LEVEL1_SPAN          (PGSIZE * MMIX_PT_ENTRIES)
 #define MMIX_KERNEL_LOW_CHILDREN     (LOW_RAM_END / MMIX_PT_LEVEL1_SPAN - 1)
 #define MMIX_KERNEL_BARE_CHILDREN                                         \
@@ -981,21 +978,27 @@ kernel_device_span(uint64 base, uint64 size)
 static uint64
 kernel_high_ram_size(void)
 {
-  return mmix_platform.memory.ram_size > PHYSICAL_LOW_RAM_SIZE
-           ? mmix_platform.memory.ram_size - PHYSICAL_LOW_RAM_SIZE
+  struct platform_physical_range ram;
+
+  if (platform_ram(&ram) != PLATFORM_OK)
+    return 0;
+  return ram.size > PHYSICAL_LOW_RAM_SIZE
+           ? ram.size - PHYSICAL_LOW_RAM_SIZE
            : 0;
 }
 
 static int
 kernel_physical_memory_valid(void)
 {
-  uint64 ram_size = mmix_platform.memory.ram_size;
-  uint64 high_size = kernel_high_ram_size();
+  struct platform_physical_range ram;
+  uint64 high_size;
 
-  if (mmix_platform.memory.ram_start != PHYSICAL_LOW_RAM_BASE ||
-      ram_size < PHYSICAL_LOW_RAM_SIZE ||
-      (ram_size & (PGSIZE - 1)) != 0)
+  if (platform_ram(&ram) != PLATFORM_OK ||
+      ram.physical_base != PHYSICAL_LOW_RAM_BASE ||
+      ram.size < PHYSICAL_LOW_RAM_SIZE ||
+      (ram.size & (PGSIZE - 1)) != 0)
     return 0;
+  high_size = ram.size - PHYSICAL_LOW_RAM_SIZE;
   return high_size <= KERNEL_IDENTITY_LIMIT - PHYSICAL_HIGH_RAM_BASE;
 }
 
@@ -1172,7 +1175,6 @@ kernel_pagetable_audit(pagetable_t pagetable)
       require_identity(pagetable, (uint64)kvminit, PTE_R | PTE_X) < 0 ||
       require_identity(pagetable, (uint64)kvminithart, PTE_R | PTE_X) < 0 ||
       require_identity(pagetable, (uint64)&child_count, PTE_R | PTE_W) < 0 ||
-      require_identity(pagetable, (uint64)&mmix_platform, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, (uint64)&mmix_boot_handoffs[0],
                        PTE_R | PTE_W) < 0 ||
       require_identity(pagetable,
