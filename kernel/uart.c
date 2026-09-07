@@ -7,7 +7,11 @@
 #include "defs.h"
 #include "boot.h"
 #include "intc.h"
+#include "platform.h"
 #include "printk.h"
+
+// FIXME: Remove after this driver adopts the platform query interface.
+extern struct platform mmix_platform;
 
 // QEMU exposes a byte-spaced 16550-compatible UART at UART0_BASE.
 enum {

@@ -8,10 +8,14 @@
 #include "sleeplock.h"
 #include "boot.h"
 #include "kalloc.h"
+#include "platform.h"
 #include "printk.h"
 #include "intc.h"
 #include "defs.h"
 #include "fs.h"
+
+// FIXME: Remove after this driver adopts the platform query interface.
+extern struct platform mmix_platform;
 #include "buf.h"
 #include "virtio.h"
 

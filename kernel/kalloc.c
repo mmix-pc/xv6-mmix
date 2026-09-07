@@ -6,8 +6,12 @@
 #include "param.h"
 #include "boot.h"
 #include "kalloc.h"
+#include "platform.h"
 #include "spinlock.h"
 #include "defs.h"
+
+// FIXME: Remove after the allocator adopts the platform query interface.
+extern struct platform mmix_platform;
 
 extern char kernel_end[]; // First address after the loaded kernel.
                           // Defined by kernel.ld.

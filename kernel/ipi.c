@@ -2,6 +2,10 @@
 #include "cpu.h"
 #include "ipi.h"
 #include "mmix.h"
+#include "platform.h"
+
+// FIXME: Remove after this driver adopts the platform query interface.
+extern struct platform mmix_platform;
 
 enum {
   MMIX_IPI_REGISTER_SIZE = 8,

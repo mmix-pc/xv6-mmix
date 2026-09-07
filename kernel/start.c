@@ -7,6 +7,7 @@
 #include "intc.h"
 #include "ipi.h"
 #include "kcontext.h"
+#include "platform.h"
 #include "timer.h"
 #include "vm.h"
 
@@ -137,15 +138,20 @@ startup_wait_for_arrivals(uint64 expected_mask)
 }
 
 static int
-startup_validate_handoffs(const struct platform *platform,
-                          uint64 fdt_address)
+startup_validate_handoffs(uint64 fdt_address)
 {
-  for (uint64 cpu_id = 0; cpu_id < platform->topology.count; cpu_id++) {
+  uint32 cpu_count = platform_cpu_count();
+
+  for (uint64 cpu_id = 0; cpu_id < cpu_count; cpu_id++) {
     const struct mmix_boot_handoff *handoff = &mmix_boot_handoffs[cpu_id];
-    const struct platform_cpu *cpu = &platform->topology.cpus[cpu_id];
+    struct platform_physical_range stack;
     uint64 stage = __atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
                                    __ATOMIC_ACQUIRE);
 
+    if (platform_cpu_initial_stack(cpu_id, &stack) != PLATFORM_OK) {
+      startup_fail(MMIX_STARTUP_FAILURE_REGISTER_STACK);
+      return -1;
+    }
     if (handoff->startup_cpu_id != cpu_id ||
         handoff->fdt_address != fdt_address) {
       startup_fail(MMIX_STARTUP_FAILURE_FDT);
@@ -155,9 +161,9 @@ startup_validate_handoffs(const struct platform *platform,
       startup_fail(MMIX_STARTUP_FAILURE_ENTRY_RL);
       return -1;
     }
-    if (handoff->entry_ro != cpu->initial_register_stack ||
-        handoff->entry_rs != cpu->initial_register_stack ||
-        cpu->initial_register_stack_size != INITIAL_REGISTER_STACK_SIZE) {
+    if (handoff->entry_ro != stack.physical_base ||
+        handoff->entry_rs != stack.physical_base ||
+        stack.size != INITIAL_REGISTER_STACK_SIZE) {
       startup_fail(MMIX_STARTUP_FAILURE_REGISTER_STACK);
       return -1;
     }
@@ -169,7 +175,7 @@ startup_validate_handoffs(const struct platform *platform,
       return -1;
     }
   }
-  for (uint64 cpu_id = 0; cpu_id < platform->topology.count; cpu_id++) {
+  for (uint64 cpu_id = 0; cpu_id < cpu_count; cpu_id++) {
     uint64 left = mmix_boot_handoffs[cpu_id].entry_ro;
 
     for (uint64 other = 0; other < cpu_id; other++) {
@@ -239,8 +245,8 @@ secondary_wait_for_global(uint64 cpu_id, uint64 fdt_address)
                           __ATOMIC_RELAXED) != 1 ||
           __atomic_load_n(&mmix_startup.ready_cookie, __ATOMIC_RELAXED) !=
             MMIX_STARTUP_READY_COOKIE ||
-          cpu_id >= mmix_platform.topology.count ||
-          fdt_address != mmix_fdt_address) {
+          cpu_id >= platform_cpu_count() ||
+          fdt_address != platform_fdt_physical_address()) {
         startup_fail(MMIX_STARTUP_FAILURE_PREMATURE_PUBLICATION);
         startup_terminal();
       }
@@ -262,7 +268,7 @@ secondary_wait_for_global(uint64 cpu_id, uint64 fdt_address)
 int
 boot_wait_for_online(void)
 {
-  uint64 cpu_count = mmix_platform.topology.count;
+  uint64 cpu_count = platform_cpu_count();
   uint64 expected_mask = startup_expected_mask(cpu_count);
 
   if (__atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
@@ -335,7 +341,7 @@ boot_publish_interrupt_ready(void)
   uint32 timer_irq_number;
   struct cpu *c = mycpu();
 
-  if (cpu_id >= mmix_platform.topology.count || c != &cpus[cpu_id] ||
+  if (cpu_id >= platform_cpu_count() || c != &cpus[cpu_id] ||
       timer_irq(&timer_irq_number) != MMIX_TIMER_OK ||
       intc_enabled(&enabled) != MMIX_INTC_OK || !intr_get())
     goto fail;
@@ -374,7 +380,7 @@ fail:
 int
 boot_wait_for_interrupt_ready(void)
 {
-  uint64 cpu_count = mmix_platform.topology.count;
+  uint64 cpu_count = platform_cpu_count();
   uint64 expected_mask = startup_expected_mask(cpu_count);
 
   if (cpuid() != BOOT_CPU_ID ||
@@ -424,7 +430,7 @@ fail:
 int
 boot_release_schedulers(void)
 {
-  uint64 cpu_count = mmix_platform.topology.count;
+  uint64 cpu_count = platform_cpu_count();
   uint64 expected_mask = startup_expected_mask(cpu_count);
 
   if (cpuid() != BOOT_CPU_ID || intr_get() || mycpu()->proc != 0 ||
@@ -459,7 +465,7 @@ boot_wait_for_scheduler_release(void)
 {
   uint64 cpu_id = cpuid();
 
-  if (cpu_id == BOOT_CPU_ID || cpu_id >= mmix_platform.topology.count ||
+  if (cpu_id == BOOT_CPU_ID || cpu_id >= platform_cpu_count() ||
       !intr_get() ||
       __atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
                       __ATOMIC_ACQUIRE) != MMIX_CPU_STAGE_SECONDARY_IDLE)
@@ -489,7 +495,7 @@ boot_publish_scheduler_ready(void)
   uint64 expected_stage = cpu_id == BOOT_CPU_ID ?
     MMIX_CPU_STAGE_SERVICE : MMIX_CPU_STAGE_SECONDARY_IDLE;
 
-  if (cpu_id >= mmix_platform.topology.count || c != &cpus[cpu_id] ||
+  if (cpu_id >= platform_cpu_count() || c != &cpus[cpu_id] ||
       __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
         MMIX_STARTUP_SCHEDULER_RELEASED ||
       c->proc != 0 || c->scheduler_entries != 1 ||
@@ -602,8 +608,8 @@ start(uint64 startup_cpu_id, uint64 fdt_address, uint64 entry_rl,
     goto failed;
   }
   if (startup_wait_for_arrivals(
-        startup_expected_mask(mmix_platform.topology.count)) < 0 ||
-      startup_validate_handoffs(&mmix_platform, fdt_address) < 0 ||
+        startup_expected_mask(platform_cpu_count())) < 0 ||
+      startup_validate_handoffs(fdt_address) < 0 ||
       startup_claim_global_initialization() < 0)
     goto failed;
 

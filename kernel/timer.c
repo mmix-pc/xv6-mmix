@@ -1,6 +1,10 @@
 #include "boot.h"
 #include "cpu.h"
+#include "platform.h"
 #include "timer.h"
+
+// FIXME: Remove after this driver adopts the platform query interface.
+extern struct platform mmix_platform;
 
 enum {
   MMIX_TIMER_REGISTER_SIZE = 8,

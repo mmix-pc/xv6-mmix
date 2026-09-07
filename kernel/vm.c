@@ -1,11 +1,15 @@
 #include "mmix.h"
 #include "boot.h"
+#include "platform.h"
 #include "defs.h"
 #include "diagnostic.h"
 #include "kalloc.h"
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+
+// FIXME: Remove after VM adopts the platform query interface.
+extern struct platform mmix_platform;
 
 #define MMIX_PT_LEVEL1_SPAN          (PGSIZE * MMIX_PT_ENTRIES)
 #define MMIX_KERNEL_LOW_CHILDREN     (LOW_RAM_END / MMIX_PT_LEVEL1_SPAN - 1)
@@ -1161,8 +1165,8 @@ kernel_pagetable_audit(pagetable_t pagetable)
 
   ro = mmix_ro_read();
   rs = mmix_rs_read();
-  if (!boot_initial_register_stack_contains(cpuid(), ro) ||
-      !boot_initial_register_stack_contains(cpuid(), rs) ||
+  if (!platform_cpu_initial_stack_contains(cpuid(), ro) ||
+      !platform_cpu_initial_stack_contains(cpuid(), rs) ||
       require_identity(pagetable, ro, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, rs, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, (uint64)kvminit, PTE_R | PTE_X) < 0 ||
@@ -1331,7 +1335,7 @@ kvminithart(void)
     panic("paging state");
   mmix_rv_publish(kernel_pagetable->rv);
   if (mmix_rv_read() != kernel_pagetable->rv || mmix_intr_get() ||
-      !boot_initial_register_stack_contains(cpu_id, mmix_ro_read()) ||
-      !boot_initial_register_stack_contains(cpu_id, mmix_rs_read()))
+      !platform_cpu_initial_stack_contains(cpu_id, mmix_ro_read()) ||
+      !platform_cpu_initial_stack_contains(cpu_id, mmix_rs_read()))
     panic("paging enable");
 }

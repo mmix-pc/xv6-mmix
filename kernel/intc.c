@@ -1,6 +1,10 @@
 #include "boot.h"
 #include "cpu.h"
 #include "intc.h"
+#include "platform.h"
+
+// FIXME: Remove after this driver adopts the platform query interface.
+extern struct platform mmix_platform;
 
 enum {
   MMIX_INTC_REGISTER_SIZE = 4,

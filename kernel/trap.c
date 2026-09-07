@@ -8,6 +8,7 @@
 #include "diagnostic.h"
 #include "intc.h"
 #include "ipi.h"
+#include "platform.h"
 #include "timer.h"
 #include "defs.h"
 
@@ -568,8 +569,8 @@ trapinithart(void)
   c->trap.user_trapframe = 0;
   if (mmix_trap_vector == 0)
     panic("trap state");
-  if (!boot_initial_register_stack_contains(cpu_id, ro) ||
-      !boot_initial_register_stack_contains(cpu_id, rs))
+  if (!platform_cpu_initial_stack_contains(cpu_id, ro) ||
+      !platform_cpu_initial_stack_contains(cpu_id, rs))
     panic("trap register stack");
   if (sp <= BOOT_STACK_BASE(cpu_id) + MMIX_TRAP_STACK_RESERVE ||
       sp > BOOT_STACK_TOP(cpu_id))

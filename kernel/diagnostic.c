@@ -1,6 +1,7 @@
 #include "boot.h"
 #include "kalloc.h"
 #include "diagnostic.h"
+#include "platform.h"
 #include "printk.h"
 #include "vm.h"
 #include "defs.h"
@@ -69,7 +70,7 @@ diagnostic_startup_failure(uint64 failure, int decode_status)
 void
 diagnostic_platform_checkpoint(void)
 {
-  uint64 cpu_count = mmix_platform.topology.count;
+  uint64 cpu_count = platform_cpu_count();
 
   diagnostic_puts("xv6 MMIX platform checkpoint\n");
   diagnostic_puts("platform: generation=");
@@ -77,7 +78,7 @@ diagnostic_platform_checkpoint(void)
   diagnostic_puts(" publications=");
   diagnostic_put_u64(mmix_startup.platform_publications);
   diagnostic_puts(" fdt=");
-  diagnostic_put_hex64(mmix_fdt_address);
+  diagnostic_put_hex64(platform_fdt_physical_address());
   diagnostic_puts(" cpus=");
   diagnostic_put_u64(cpu_count);
   diagnostic_putc('\n');

@@ -3,7 +3,6 @@
 
 #include "types.h"
 #include "memlayout.h"
-#include "platform.h"
 
 // Immutable entry data retained separately before the SMP startup barrier can
 // publish the canonical boot description.
@@ -78,23 +77,8 @@ struct mmix_startup_control {
   uint64 interrupt_ready;
 };
 
-extern struct platform mmix_platform;
-extern uint64 mmix_fdt_address;
 extern struct mmix_boot_handoff mmix_boot_handoffs[];
 extern struct mmix_startup_control mmix_startup;
-
-static inline int
-boot_initial_register_stack_contains(uint64 cpu_id, uint64 address)
-{
-  const struct platform_cpu *cpu;
-
-  if (cpu_id >= mmix_platform.topology.count)
-    return 0;
-  cpu = &mmix_platform.topology.cpus[cpu_id];
-  return address >= cpu->initial_register_stack &&
-         address - cpu->initial_register_stack <
-           cpu->initial_register_stack_size;
-}
 
 void start(uint64 startup_cpu_id, uint64 fdt_address, uint64 entry_rl,
            uint64 entry_ro, uint64 entry_rs)
