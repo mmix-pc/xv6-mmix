@@ -10,6 +10,7 @@
 #define PLATFORM_FRAMEBUFFER_SIZE   0x00300000UL
 #define PLATFORM_MAX_RESERVATIONS   (NCPU + 2)
 #define PLATFORM_NO_CPU             (~0U)
+#define PLATFORM_VIRTIO_SLOTS       32U
 
 enum platform_status {
   PLATFORM_OK = 0,
@@ -29,6 +30,14 @@ enum platform_status {
   PLATFORM_BAD_FRAMEBUFFER_MEMORY = -14,
   PLATFORM_RESERVATION_OVERLAP = -15,
   PLATFORM_UNSUPPORTED_INITRD = -16,
+  PLATFORM_BAD_SOC = -17,
+  PLATFORM_BAD_INTERRUPT_CONTROLLER = -18,
+  PLATFORM_BAD_UART = -19,
+  PLATFORM_BAD_TIMER = -20,
+  PLATFORM_BAD_IPI = -21,
+  PLATFORM_BAD_VIRTIO = -22,
+  PLATFORM_BAD_FRAMEBUFFER_DEVICE = -23,
+  PLATFORM_BAD_DEVICE_REFERENCE = -24,
 };
 
 enum platform_reservation_owner {
@@ -70,9 +79,69 @@ struct platform_memory {
   struct platform_reservation reservations[PLATFORM_MAX_RESERVATIONS];
 };
 
+struct platform_mmio_range {
+  uint64 start;
+  uint64 size;
+};
+
+struct platform_interrupt_controller {
+  struct platform_mmio_range global;
+  struct platform_mmio_range contexts;
+  uint32 source_count;
+  uint32 context_count;
+  uint32 context_stride;
+};
+
+struct platform_uart {
+  struct platform_mmio_range registers;
+  uint32 interrupt;
+  uint32 clock_frequency;
+  uint32 baud_rate;
+  uint32 register_shift;
+  uint32 register_width;
+};
+
+struct platform_timer {
+  struct platform_mmio_range global;
+  struct platform_mmio_range contexts;
+  uint32 context_count;
+  uint32 context_stride;
+  uint32 clock_frequency;
+  uint32 interrupts[NCPU];
+};
+
+struct platform_ipi {
+  struct platform_mmio_range global;
+  struct platform_mmio_range contexts;
+  uint32 context_count;
+  uint32 context_stride;
+  uint32 request_bit;
+};
+
+struct platform_virtio_slot {
+  struct platform_mmio_range registers;
+  uint32 interrupt;
+};
+
+struct platform_framebuffer {
+  struct platform_mmio_range control;
+  struct platform_mmio_range memory;
+};
+
+struct platform_devices {
+  struct platform_interrupt_controller interrupt_controller;
+  struct platform_uart uart;
+  struct platform_timer timer;
+  struct platform_ipi ipi;
+  struct platform_virtio_slot virtio[PLATFORM_VIRTIO_SLOTS];
+  uint32 virtio_count;
+  struct platform_framebuffer framebuffer;
+};
+
 struct platform {
   struct platform_cpu_topology topology;
   struct platform_memory memory;
+  struct platform_devices devices;
 };
 
 struct fdt;
@@ -80,5 +149,6 @@ struct fdt;
 int platform_decode_cpu_topology(const struct fdt *,
                                  struct platform_cpu_topology *);
 int platform_decode(const struct fdt *, uint64, struct platform *);
+int platform_decode_devices(const struct fdt *, struct platform *);
 
 #endif
