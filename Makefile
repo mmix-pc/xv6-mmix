@@ -10,6 +10,7 @@ OBJS = \
   $K/main.o \
   $K/trap.o \
   $K/fdt.o \
+  $K/platform.o \
   $K/bootinfo.o \
   $K/cpu.o \
   $K/kcontext.o \
