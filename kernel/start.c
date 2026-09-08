@@ -547,10 +547,18 @@ boot_publish_scheduler_ready(void)
   uint64 cpu_id = cpuid();
   uint64 expected_stage = cpu_id == BOOT_CPU_ID ?
     MMIX_CPU_STAGE_SERVICE : MMIX_CPU_STAGE_SECONDARY_IDLE;
+  int memory_only = cpu_id == BOOT_CPU_ID && platform_cpu_count() == 1 &&
+    __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) ==
+      MMIX_STARTUP_GLOBAL_READY && cpu_boot_stack_departures() == 1 &&
+    __atomic_load_n(&mmix_startup.interrupt_ready, __ATOMIC_ACQUIRE) == 0;
+
+  if (memory_only)
+    expected_stage = MMIX_CPU_STAGE_ONLINE;
 
   if (cpu_id >= platform_cpu_count() || c != &cpus[cpu_id] ||
-      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
-        MMIX_STARTUP_SCHEDULER_RELEASED ||
+      (!memory_only &&
+       __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+         MMIX_STARTUP_SCHEDULER_RELEASED) ||
       c->proc != 0 || c->scheduler_entries != 1 ||
       c->scheduler_dispatches != 0 || c->noff != 0 || c->trap.active != 0 ||
       c->trap.user_trapframe != 0 || intr_get() ||
@@ -562,6 +570,9 @@ boot_publish_scheduler_ready(void)
                                    MMIX_CPU_STAGE_SCHEDULER, 0,
                                    __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
     goto fail;
+  if (memory_only)
+    __atomic_store_n(&mmix_startup.state, MMIX_STARTUP_SCHEDULER_RELEASED,
+                     __ATOMIC_RELEASE);
   printk("scheduler-ready: cpu=%d context=%p\n", (int)cpu_id,
          (void *)c->context.state);
   return 0;

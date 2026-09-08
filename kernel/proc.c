@@ -1107,9 +1107,10 @@ scheduler_loop(void)
   for (;;) {
     int found = 0;
     for (p = proc; p < &proc[NPROC]; p++) {
-      // No process or process stack is owned here. Enable timer delivery before
-      // acquire() closes the state-transition and context-switch window.
-      intr_on();
+      // Enable delivery only after this CPU's interrupt setup is complete.
+      if (__atomic_load_n(&mmix_startup.interrupt_ready, __ATOMIC_ACQUIRE) &
+          (1ULL << cpuid()))
+        intr_on();
       acquire(&p->lock);
       if (p->state == RUNNABLE &&
           (p->resume_cpu == -1 || p->resume_cpu == cpuid())) {
