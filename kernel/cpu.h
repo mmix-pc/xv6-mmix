@@ -87,6 +87,11 @@ _Static_assert(sizeof(struct cpu) == MMIX_CPU_SIZE,
 
 extern struct cpu cpus[NCPU];
 
+void cpu_context_enter(void (*)(void)) __attribute__((noreturn));
+// Only the matching CPU may retire its initial stack, from its permanent slot.
+// Returns a physmem_status; successful publication is irreversible.
+int cpu_reclaim_initial_stack(uint32);
+
 int cpuid(void);
 struct cpu *mycpu(void);
 int intr_get(void);

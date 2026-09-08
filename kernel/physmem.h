@@ -39,6 +39,8 @@ struct physmem_release {
 int physmem_init(void);
 uint32 physmem_span_count(void);
 int physmem_span(uint32, struct physmem_span *);
+// Check one complete range against a single planner snapshot.
+int physmem_contains(uint64, uint64);
 uint64 physmem_managed_pages(void);
 uint64 physmem_reserved_pages(void);
 int physmem_release_fdt(struct physmem_release *);

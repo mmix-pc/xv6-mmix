@@ -422,6 +422,27 @@ physmem_span(uint32 index, struct physmem_span *span)
   return status;
 }
 
+int
+physmem_contains(uint64 start, uint64 size)
+{
+  int found = 0;
+
+  if (size == 0 || size > ~start)
+    return 0;
+  lock_plan();
+  if (plan.ready)
+    for (uint32 i = 0; i < plan.span_count; i++) {
+      const struct physmem_span *span = &plan.spans[i];
+      if (start >= span->physical_base &&
+          start + size <= span->physical_base + span->size) {
+        found = 1;
+        break;
+      }
+    }
+  unlock_plan();
+  return found;
+}
+
 uint64
 physmem_managed_pages(void)
 {

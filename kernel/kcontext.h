@@ -9,5 +9,7 @@ void kcontext_init(void);
 void kcontext_prepare(struct context *, uint, void (*)(void));
 void kcontext_prepare_arg(struct context *, uint, void (*)(uint64), uint64);
 int kcontext_current_valid(const struct context *, uint);
+// Discard the current context; no SAVE record permits a return to its stacks.
+void kcontext_enter(const struct context *) __attribute__((noreturn));
 
 #endif

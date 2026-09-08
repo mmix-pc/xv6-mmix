@@ -78,22 +78,6 @@ allocator_audit_locked(void)
     panic("kalloc freelist");
 }
 
-static int
-planner_contains(uint64 start, uint64 limit)
-{
-  uint32 count = physmem_span_count();
-
-  for (uint32 index = 0; index < count; index++) {
-    struct physmem_span span;
-
-    if (physmem_span(index, &span) != PHYSMEM_OK)
-      return 0;
-    if (start >= span.physical_base && limit <= span.physical_base + span.size)
-      return 1;
-  }
-  return 0;
-}
-
 static void
 publish_ranges(const struct physmem_span *ranges, uint32 range_count,
                uint64 page_count, int initial)
@@ -125,8 +109,9 @@ publish_ranges(const struct physmem_span *ranges, uint32 range_count,
     uint64 start = ranges[index].physical_base;
     uint64 size = ranges[index].size;
 
+    // Concurrent releases can merge spans between separate index queries.
     if (size == 0 || size > ~start || ((start | size) & (PGSIZE - 1)) != 0 ||
-        !planner_contains(start, start + size)) {
+        !physmem_contains(start, size)) {
       release(&kmem.lock);
       panic("kalloc range");
     }

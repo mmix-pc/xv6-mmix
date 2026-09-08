@@ -15,3 +15,13 @@ swtch:
         // context, this consumes its synthetic outer hole and enters rJ.
         POP 0,0
 .size swtch,.-swtch
+
+.global kcontext_enter
+.type kcontext_enter,@function
+kcontext_enter:
+        // A bootstrap context must never be resumed after its pages are freed.
+        // UNSAVE replaces all register-stack state without saving a return path.
+        LDOU r255,r231,MMIX_CONTEXT_STATE_OFFSET
+        UNSAVE r255
+        POP 0,0
+.size kcontext_enter,.-kcontext_enter

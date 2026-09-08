@@ -1077,7 +1077,6 @@ static void scheduler_loop(void) __attribute__((noreturn));
 void
 scheduler(void)
 {
-  struct context startup_context;
   struct cpu *c;
   uint slot;
 
@@ -1088,9 +1087,7 @@ scheduler(void)
     scheduler_loop();
   if (c->context.state != 0)
     panic("scheduler context");
-  kcontext_prepare(&c->context, slot, scheduler_loop);
-  swtch(&startup_context, &c->context);
-  panic("scheduler returned");
+  cpu_context_enter(scheduler_loop);
 }
 
 // A process switches out holding p->lock; this loop releases that lock only
