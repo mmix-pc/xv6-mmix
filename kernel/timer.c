@@ -8,7 +8,7 @@
 enum {
   MMIX_TIMER_REGISTER_SIZE = 8,
   MMIX_TIMER_TIME_OFFSET = 0x0000,
-  MMIX_TIMER_CONTEXT_STRIDE = 0x40,
+  MMIX_TIMER_CONTEXT_STRIDE = 0x10000,
   MMIX_TIMER_CONTEXT_COMPARE_OFFSET = 0x00,
   MMIX_TIMER_CONTEXT_CONTROL_OFFSET = 0x08,
   MMIX_TIMER_CONTEXT_STATUS_OFFSET = 0x10,
@@ -17,10 +17,7 @@ enum {
   MMIX_TIMER_STATUS_PENDING = 1 << 0,
 };
 
-#define MMIX_TIMER_UNITS_PER_SECOND 1000000000ULL
 #define MMIX_TIMER_TICKS_PER_SECOND 10ULL
-#define MMIX_TIMER_TICK_INTERVAL                                               \
-  (MMIX_TIMER_UNITS_PER_SECOND / MMIX_TIMER_TICKS_PER_SECOND)
 #define MMIX_TIMER_MAX_DEADLINE 0x7fffffffffffffffULL
 
 static uint64 tick_count[MMIX_MAX_CPUS];
@@ -28,6 +25,7 @@ static struct platform_timer_config timer_config;
 static uint32 timer_interrupts[MMIX_MAX_CPUS];
 static uint32 timer_cpu_count;
 static uint64 timer_configured;
+static uint64 timer_tick_interval;
 
 static int
 timer_configure(void)
@@ -47,7 +45,8 @@ timer_configure(void)
       config.context_stride != MMIX_TIMER_CONTEXT_STRIDE ||
       config.context_count != cpu_count || cpu_count == 0 ||
       cpu_count > MMIX_MAX_CPUS ||
-      config.context_count > TIMER_IRQ_COUNT_MAX)
+      config.clock_frequency < MMIX_TIMER_TICKS_PER_SECOND ||
+      config.clock_frequency % MMIX_TIMER_TICKS_PER_SECOND != 0)
     return 0;
   for (uint32 id = 0; id < config.context_count; id++) {
     if (platform_timer_interrupt(id, &interrupts[id]) != PLATFORM_OK ||
@@ -57,6 +56,8 @@ timer_configure(void)
 
   timer_config = config;
   timer_cpu_count = cpu_count;
+  // Preserve an exact kernel tick period in the device's advertised units.
+  timer_tick_interval = config.clock_frequency / MMIX_TIMER_TICKS_PER_SECOND;
   for (uint32 id = 0; id < cpu_count; id++)
     timer_interrupts[id] = interrupts[id];
   __atomic_store_n(&timer_configured, 1, __ATOMIC_RELEASE);
@@ -216,9 +217,10 @@ timer_arm_next(void)
     return MMIX_TIMER_BAD_PLATFORM;
 
   now = timer_read(timer_register(MMIX_TIMER_TIME_OFFSET));
-  if (now > MMIX_TIMER_MAX_DEADLINE - MMIX_TIMER_TICK_INTERVAL)
+  // QEMU's timer deadlines occupy the nonnegative signed-clock range.
+  if (now > MMIX_TIMER_MAX_DEADLINE - timer_tick_interval)
     return MMIX_TIMER_BAD_DEADLINE;
-  next = now + MMIX_TIMER_TICK_INTERVAL;
+  next = now + timer_tick_interval;
 
   compare = timer_context_register(MMIX_TIMER_CONTEXT_COMPARE_OFFSET);
   control = timer_context_register(MMIX_TIMER_CONTEXT_CONTROL_OFFSET);
@@ -248,11 +250,11 @@ timer_record_tick(void)
 uint64
 timer_ticks(void)
 {
+  if (!timer_current_valid())
+    panic("timer context");
   return tick_count[cpuid()];
 }
 
-_Static_assert((MMIX_TIMER_UNITS_PER_SECOND % MMIX_TIMER_TICKS_PER_SECOND) == 0,
-               "xv6 tick interval must be exact in MMIX timer units");
 _Static_assert((MMIX_TIMER_TIME_OFFSET & (MMIX_TIMER_REGISTER_SIZE - 1)) == 0,
                "MMIX timer time register must be octa-aligned");
 _Static_assert((MMIX_TIMER_CONTEXT_STRIDE & (MMIX_TIMER_REGISTER_SIZE - 1)) == 0,
