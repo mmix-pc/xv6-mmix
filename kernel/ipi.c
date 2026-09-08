@@ -2,13 +2,13 @@
 #include "cpu.h"
 #include "ipi.h"
 #include "mmix.h"
+#include "defs.h"
 #include "platform.h"
 
 enum {
   MMIX_IPI_REGISTER_SIZE = 8,
   MMIX_IPI_ACTIVE_OFFSET = 0x0000,
   MMIX_IPI_SEND_OFFSET = 0x0008,
-  MMIX_IPI_CONTEXT_BASE = 0x0100,
   MMIX_IPI_CONTEXT_STRIDE = 0x20,
   MMIX_IPI_CONTEXT_STATUS_OFFSET = 0x00,
   MMIX_IPI_CONTEXT_CLEAR_OFFSET = 0x08,
@@ -40,31 +40,42 @@ ipi_active_targets(void)
   return (1ULL << ipi_config.context_count) - 1;
 }
 
-static volatile uint64 *
+static uint64
 ipi_register(uint64 offset)
 {
-  return (volatile uint64 *)(ipi_config.physical_global.physical_base +
-                             offset);
+  uint64 address;
+
+  if (mmix_mmio_address(ipi_config.physical_global.physical_base,
+                         ipi_config.physical_global.size, offset,
+                         MMIX_IPI_REGISTER_SIZE, &address) < 0)
+    panic("ipi register");
+  return address;
 }
 
 static uint64
 ipi_context_register(uint32 target, uint64 offset)
 {
-  return ipi_config.physical_contexts.physical_base -
-           ipi_config.physical_global.physical_base +
-         (uint64)target * ipi_config.context_stride + offset;
+  uint64 address;
+
+  if (mmix_mmio_context_address(ipi_config.physical_contexts.physical_base,
+                                 ipi_config.physical_contexts.size, target,
+                                 ipi_config.context_count,
+                                 ipi_config.context_stride, offset,
+                                 MMIX_IPI_REGISTER_SIZE, &address) < 0)
+    panic("ipi context register");
+  return address;
 }
 
 static uint64
-ipi_read(uint64 offset)
+ipi_read(uint64 address)
 {
-  return *ipi_register(offset);
+  return *(volatile uint64 *)address;
 }
 
 static void
-ipi_write(uint64 offset, uint64 value)
+ipi_write(uint64 address, uint64 value)
 {
-  *ipi_register(offset) = value;
+  *(volatile uint64 *)address = value;
 }
 
 static int
@@ -80,8 +91,6 @@ ipi_configure(void)
   cpu_count = platform_cpu_count();
   if ((config.physical_global.physical_base &
        (MMIX_IPI_REGISTER_SIZE - 1)) != 0 ||
-      config.physical_contexts.physical_base !=
-        config.physical_global.physical_base + MMIX_IPI_CONTEXT_BASE ||
       config.context_stride != MMIX_IPI_CONTEXT_STRIDE || cpu_count == 0 ||
       cpu_count > MMIX_MAX_CPUS || config.context_count != cpu_count ||
       config.context_count > IPI_TARGET_COUNT_MAX ||
@@ -90,7 +99,7 @@ ipi_configure(void)
 
   ipi_config = config;
   ipi_cpu_count = cpu_count;
-  if (ipi_read(MMIX_IPI_ACTIVE_OFFSET) != ipi_active_targets())
+  if (ipi_read(ipi_register(MMIX_IPI_ACTIVE_OFFSET)) != ipi_active_targets())
     return 0;
   __atomic_store_n(&ipi_configured, 1, __ATOMIC_RELEASE);
   return 1;
@@ -199,7 +208,7 @@ ipi_send(uint64 targets, uint64 *generation)
                      __ATOMIC_RELEASE);
   }
 
-  ipi_write(MMIX_IPI_SEND_OFFSET, targets);
+  ipi_write(ipi_register(MMIX_IPI_SEND_OFFSET), targets);
   *generation = allocated;
   __atomic_store_n(&ipi_send_lock, 0, __ATOMIC_RELEASE);
   return MMIX_IPI_OK;
@@ -259,7 +268,7 @@ ipi_send_work(uint64 targets, uint64 classes, uint64 work_generation,
     __atomic_store_n(&target->requested, allocated, __ATOMIC_RELEASE);
   }
 
-  ipi_write(MMIX_IPI_SEND_OFFSET, targets);
+  ipi_write(ipi_register(MMIX_IPI_SEND_OFFSET), targets);
   *notification_generation = allocated;
   __atomic_store_n(&ipi_send_lock, 0, __ATOMIC_RELEASE);
   return MMIX_IPI_OK;
@@ -345,7 +354,7 @@ ipi_service(ipi_work_handler handler)
   // guest-memory generation, even if its first device write was coalesced.
   latest = __atomic_load_n(&target->requested, __ATOMIC_ACQUIRE);
   if (latest != observed)
-    ipi_write(MMIX_IPI_SEND_OFFSET, 1ULL << id);
+    ipi_write(ipi_register(MMIX_IPI_SEND_OFFSET), 1ULL << id);
   return MMIX_IPI_OK;
 }
 
@@ -407,8 +416,6 @@ ipi_progress(uint64 *received, uint64 *acknowledged)
 
 _Static_assert((MMIX_IPI_ACTIVE_OFFSET & (MMIX_IPI_REGISTER_SIZE - 1)) == 0 &&
                  (MMIX_IPI_SEND_OFFSET & (MMIX_IPI_REGISTER_SIZE - 1)) == 0 &&
-                 (MMIX_IPI_CONTEXT_BASE &
-                  (MMIX_IPI_REGISTER_SIZE - 1)) == 0 &&
                  (MMIX_IPI_CONTEXT_STRIDE &
                   (MMIX_IPI_REGISTER_SIZE - 1)) == 0,
                "MMIX IPI registers must be octa-aligned");

@@ -318,6 +318,36 @@ mmix_phys_alias(uint64 pa)
   return MMIX_PHYSICAL_ALIAS_BIT | pa;
 }
 
+// Callers supply a physical device range from a validated platform query.
+// Direct aliases have 63 physical bits, independent of the 48-bit PTE field.
+// These checks do not map memory or establish device ownership.
+static inline int
+mmix_mmio_address(uint64 base, uint64 size, uint64 offset, uint width,
+                  uint64 *address)
+{
+  if (address == 0 || width == 0 || width > 8 ||
+      (width & (width - 1)) != 0 || base >= MMIX_PHYSICAL_ALIAS_BIT ||
+      size > MMIX_PHYSICAL_ALIAS_BIT - base || size < width ||
+      offset > size - width || ((base | offset) & (width - 1)) != 0)
+    return -1;
+  *address = mmix_phys_alias(base + offset);
+  return 0;
+}
+
+// A context access must fit both its own stride and the supplied aperture.
+static inline int
+mmix_mmio_context_address(uint64 base, uint64 size, uint32 index,
+                          uint32 count, uint64 stride, uint64 offset,
+                          uint width, uint64 *address)
+{
+  if (count == 0 || index >= count || stride == 0 ||
+      count > size / stride || width == 0 || stride < width ||
+      (stride & (width - 1)) != 0 || offset > stride - width)
+    return -1;
+  return mmix_mmio_address(base, size, (uint64)index * stride + offset,
+                           width, address);
+}
+
 // Validate a linked positive trap entry before converting it to the
 // privileged negative physical alias required by rT and rTT.
 static inline int

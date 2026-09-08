@@ -1,13 +1,14 @@
 #include "boot.h"
 #include "cpu.h"
 #include "intc.h"
+#include "mmix.h"
+#include "defs.h"
 #include "platform.h"
 #include "timer.h"
 
 enum {
   MMIX_INTC_REGISTER_SIZE = 4,
   MMIX_INTC_PENDING_OFFSET = 0x0000,
-  MMIX_INTC_CONTEXT_BASE = 0x1000,
   MMIX_INTC_CONTEXT_STRIDE = 0x100,
   MMIX_INTC_CONTEXT_ENABLE_OFFSET = 0x00,
   MMIX_INTC_CONTEXT_CLAIM_OFFSET = 0x04,
@@ -44,8 +45,6 @@ intc_configure(void)
   cpu_count = platform_cpu_count();
   if ((config.physical_global.physical_base &
        (MMIX_INTC_REGISTER_SIZE - 1)) != 0 ||
-      config.physical_contexts.physical_base !=
-        config.physical_global.physical_base + MMIX_INTC_CONTEXT_BASE ||
       config.context_stride != MMIX_INTC_CONTEXT_STRIDE || cpu_count == 0 ||
       cpu_count > MMIX_MAX_CPUS || config.context_count != cpu_count ||
       config.source_count <= 1 ||
@@ -85,31 +84,42 @@ intc_irq_valid(uint32 irq)
   return intc_config_valid() && irq != 0 && irq < intc_config.source_count;
 }
 
-static volatile uint32 *
+static uint64
 intc_register(uint64 offset)
 {
-  return (volatile uint32 *)(intc_config.physical_global.physical_base +
-                             offset);
+  uint64 address;
+
+  if (mmix_mmio_address(intc_config.physical_global.physical_base,
+                         intc_config.physical_global.size, offset,
+                         MMIX_INTC_REGISTER_SIZE, &address) < 0)
+    panic("intc register");
+  return address;
 }
 
 static uint64
 intc_context_register(uint64 offset)
 {
-  return intc_config.physical_contexts.physical_base -
-           intc_config.physical_global.physical_base +
-         (uint64)cpuid() * intc_config.context_stride + offset;
+  uint64 address;
+
+  if (mmix_mmio_context_address(intc_config.physical_contexts.physical_base,
+                                 intc_config.physical_contexts.size, cpuid(),
+                                 intc_config.context_count,
+                                 intc_config.context_stride, offset,
+                                 MMIX_INTC_REGISTER_SIZE, &address) < 0)
+    panic("intc context register");
+  return address;
 }
 
 static uint32
-intc_read(uint64 offset)
+intc_read(uint64 address)
 {
-  return *intc_register(offset);
+  return *(volatile uint32 *)address;
 }
 
 static void
-intc_write(uint64 offset, uint32 value)
+intc_write(uint64 address, uint32 value)
 {
-  *intc_register(offset) = value;
+  *(volatile uint32 *)address = value;
 }
 
 static int
@@ -201,7 +211,7 @@ intc_pending(uint32 *pending)
   if (!intc_current_valid())
     return MMIX_INTC_BAD_PLATFORM;
 
-  *pending = intc_read(MMIX_INTC_PENDING_OFFSET);
+  *pending = intc_read(intc_register(MMIX_INTC_PENDING_OFFSET));
   return MMIX_INTC_OK;
 }
 
@@ -358,9 +368,7 @@ intc_complete(uint32 irq)
 
 _Static_assert((MMIX_INTC_PENDING_OFFSET & (MMIX_INTC_REGISTER_SIZE - 1)) == 0,
                "MMIX INTC pending register must be tetra-aligned");
-_Static_assert((MMIX_INTC_CONTEXT_BASE & (MMIX_INTC_REGISTER_SIZE - 1)) == 0 &&
-                 (MMIX_INTC_CONTEXT_STRIDE & (MMIX_INTC_REGISTER_SIZE - 1)) ==
-                   0,
+_Static_assert((MMIX_INTC_CONTEXT_STRIDE & (MMIX_INTC_REGISTER_SIZE - 1)) == 0,
                "MMIX INTC contexts must be tetra-aligned");
 _Static_assert(
   (MMIX_INTC_CONTEXT_ENABLE_OFFSET & (MMIX_INTC_REGISTER_SIZE - 1)) == 0 &&

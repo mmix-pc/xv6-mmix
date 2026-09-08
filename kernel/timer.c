@@ -1,12 +1,13 @@
 #include "boot.h"
 #include "cpu.h"
+#include "mmix.h"
+#include "defs.h"
 #include "platform.h"
 #include "timer.h"
 
 enum {
   MMIX_TIMER_REGISTER_SIZE = 8,
   MMIX_TIMER_TIME_OFFSET = 0x0000,
-  MMIX_TIMER_CONTEXT_BASE = 0x0100,
   MMIX_TIMER_CONTEXT_STRIDE = 0x40,
   MMIX_TIMER_CONTEXT_COMPARE_OFFSET = 0x00,
   MMIX_TIMER_CONTEXT_CONTROL_OFFSET = 0x08,
@@ -43,8 +44,6 @@ timer_configure(void)
   cpu_count = platform_cpu_count();
   if ((config.physical_global.physical_base &
        (MMIX_TIMER_REGISTER_SIZE - 1)) != 0 ||
-      config.physical_contexts.physical_base !=
-        config.physical_global.physical_base + MMIX_TIMER_CONTEXT_BASE ||
       config.context_stride != MMIX_TIMER_CONTEXT_STRIDE ||
       config.context_count != cpu_count || cpu_count == 0 ||
       cpu_count > MMIX_MAX_CPUS ||
@@ -78,31 +77,42 @@ timer_current_valid(void)
   return timer_config_valid() && id >= 0 && (uint32)id < timer_cpu_count;
 }
 
-static volatile uint64 *
+static uint64
 timer_register(uint64 offset)
 {
-  return (volatile uint64 *)(timer_config.physical_global.physical_base +
-                             offset);
+  uint64 address;
+
+  if (mmix_mmio_address(timer_config.physical_global.physical_base,
+                         timer_config.physical_global.size, offset,
+                         MMIX_TIMER_REGISTER_SIZE, &address) < 0)
+    panic("timer register");
+  return address;
 }
 
 static uint64
 timer_context_register(uint64 offset)
 {
-  return timer_config.physical_contexts.physical_base -
-           timer_config.physical_global.physical_base +
-         (uint64)cpuid() * timer_config.context_stride + offset;
+  uint64 address;
+
+  if (mmix_mmio_context_address(timer_config.physical_contexts.physical_base,
+                                 timer_config.physical_contexts.size, cpuid(),
+                                 timer_config.context_count,
+                                 timer_config.context_stride, offset,
+                                 MMIX_TIMER_REGISTER_SIZE, &address) < 0)
+    panic("timer context register");
+  return address;
 }
 
 static uint64
-timer_read(uint64 offset)
+timer_read(uint64 address)
 {
-  return *timer_register(offset);
+  return *(volatile uint64 *)address;
 }
 
 static void
-timer_write(uint64 offset, uint64 value)
+timer_write(uint64 address, uint64 value)
 {
-  *timer_register(offset) = value;
+  *(volatile uint64 *)address = value;
 }
 
 int
@@ -205,7 +215,7 @@ timer_arm_next(void)
   if (!timer_current_valid())
     return MMIX_TIMER_BAD_PLATFORM;
 
-  now = timer_read(MMIX_TIMER_TIME_OFFSET);
+  now = timer_read(timer_register(MMIX_TIMER_TIME_OFFSET));
   if (now > MMIX_TIMER_MAX_DEADLINE - MMIX_TIMER_TICK_INTERVAL)
     return MMIX_TIMER_BAD_DEADLINE;
   next = now + MMIX_TIMER_TICK_INTERVAL;
@@ -245,10 +255,7 @@ _Static_assert((MMIX_TIMER_UNITS_PER_SECOND % MMIX_TIMER_TICKS_PER_SECOND) == 0,
                "xv6 tick interval must be exact in MMIX timer units");
 _Static_assert((MMIX_TIMER_TIME_OFFSET & (MMIX_TIMER_REGISTER_SIZE - 1)) == 0,
                "MMIX timer time register must be octa-aligned");
-_Static_assert((MMIX_TIMER_CONTEXT_BASE & (MMIX_TIMER_REGISTER_SIZE - 1)) ==
-                   0 &&
-                 (MMIX_TIMER_CONTEXT_STRIDE & (MMIX_TIMER_REGISTER_SIZE - 1)) ==
-                   0,
+_Static_assert((MMIX_TIMER_CONTEXT_STRIDE & (MMIX_TIMER_REGISTER_SIZE - 1)) == 0,
                "MMIX timer contexts must be octa-aligned");
 _Static_assert(
   (MMIX_TIMER_CONTEXT_COMPARE_OFFSET & (MMIX_TIMER_REGISTER_SIZE - 1)) == 0 &&
