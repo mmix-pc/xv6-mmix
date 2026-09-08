@@ -8,6 +8,8 @@
 #include "ipi.h"
 #include "kcontext.h"
 #include "platform.h"
+#include "physmem.h"
+#include "kalloc.h"
 #include "timer.h"
 #include "vm.h"
 
@@ -15,6 +17,7 @@ void main(void) __attribute__((noreturn));
 
 struct mmix_boot_handoff mmix_boot_handoffs[MMIX_MAX_CPUS];
 struct mmix_startup_control mmix_startup;
+static int fdt_readers_done;
 
 static void
 startup_set_stage(uint64 cpu_id, enum mmix_cpu_startup_stage stage)
@@ -323,8 +326,34 @@ boot_wait_for_online(void)
         return -1;
       }
     }
+    // Discovery retains only copied values. Every entry-address check has
+    // completed; retained FDT addresses are provenance, never blob pointers.
+    fdt_readers_done = 1;
     return 0;
   }
+}
+
+int
+boot_reclaim_fdt(void)
+{
+  struct kalloc_stats stats;
+  struct physmem_release released;
+  int status;
+
+  // The boot CPU owns this transition before any page table is constructed.
+  // Reclaim first so no stale read-only FDT translation can survive reuse.
+  if (cpuid() != BOOT_CPU_ID || !fdt_readers_done ||
+      kernel_pagetable->rv != 0 ||
+      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+        MMIX_STARTUP_GLOBAL_READY)
+    return PHYSMEM_NOT_READY;
+  kalloc_get_stats(&stats);
+  if (stats.managed_pages == 0)
+    return PHYSMEM_NOT_READY;
+  status = physmem_release_fdt(&released);
+  if (status == PHYSMEM_OK)
+    kalloc_publish_release(&released);
+  return status;
 }
 
 int

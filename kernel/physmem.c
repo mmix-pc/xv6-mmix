@@ -519,6 +519,20 @@ physmem_release_fdt(struct physmem_release *released)
 }
 
 int
+physmem_fdt_released(void)
+{
+  int released = 0;
+
+  lock_plan();
+  if (plan.ready)
+    for (uint32 i = 0; i < plan.reservation_count; i++)
+      if (plan.reservations[i].kind == RESERVATION_FDT)
+        released = !plan.reservations[i].live;
+  unlock_plan();
+  return released;
+}
+
+int
 physmem_release_cpu_stack(uint32 cpu_id, struct physmem_release *released)
 {
   if (cpu_id >= NCPU)

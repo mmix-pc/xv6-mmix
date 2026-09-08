@@ -42,6 +42,7 @@ int physmem_span(uint32, struct physmem_span *);
 uint64 physmem_managed_pages(void);
 uint64 physmem_reserved_pages(void);
 int physmem_release_fdt(struct physmem_release *);
+int physmem_fdt_released(void);
 int physmem_release_cpu_stack(uint32, struct physmem_release *);
 int physmem_release_boot_stacks(struct physmem_release *);
 

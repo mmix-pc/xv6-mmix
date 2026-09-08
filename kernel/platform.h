@@ -119,6 +119,7 @@ int platform_discover(const struct fdt *, uint64);
 // Aggregate results are copied through output parameters so no internal
 // platform storage escapes and the interface does not depend on structure-
 // return ABI support.
+// Copied entry provenance, not permission to read or retain the original blob.
 uint64 platform_fdt_physical_address(void);
 uint32 platform_cpu_count(void);
 uint64 platform_cpu_mask(void);

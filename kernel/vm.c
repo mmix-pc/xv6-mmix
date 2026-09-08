@@ -1,6 +1,7 @@
 #include "mmix.h"
 #include "boot.h"
 #include "platform.h"
+#include "physmem.h"
 #include "defs.h"
 #include "diagnostic.h"
 #include "kalloc.h"
@@ -1019,8 +1020,10 @@ build_kernel_mapping_layout(struct kernel_mapping_layout *layout)
             PLATFORM_RESERVATION_UNTIL_PLATFORM_COPIED ||
           reservation.cpu_id != PLATFORM_NO_CPU || fdt_count++ != 0)
         return -1;
-      layout->fdt_start = start;
-      layout->fdt_limit = limit;
+      if (!physmem_fdt_released()) {
+        layout->fdt_start = start;
+        layout->fdt_limit = limit;
+      }
     } else if (reservation.owner == PLATFORM_RESERVATION_FRAMEBUFFER) {
       if (reservation.lifetime != PLATFORM_RESERVATION_DEVICE_LIFETIME ||
           reservation.cpu_id != PLATFORM_NO_CPU || framebuffer_count++ != 0)
@@ -1335,7 +1338,8 @@ kernel_pagetable_audit(pagetable_t pagetable,
       return -1;
     permissions = reservation.owner == PLATFORM_RESERVATION_FRAMEBUFFER
                     ? 0
-                    : reservation.owner == PLATFORM_RESERVATION_FDT
+                    : reservation.owner == PLATFORM_RESERVATION_FDT &&
+                        !physmem_fdt_released()
                         ? PTE_R
                         : PTE_R | PTE_W;
     if (audit_interval(pagetable, start, limit, permissions) < 0)
