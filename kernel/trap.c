@@ -28,8 +28,6 @@ trap_report(enum mmix_trap_class event, const char *cause,
 {
   struct proc *p = mycpu()->proc;
   const char *event_class = "unknown";
-  uint32 enabled_irqs = ~(uint32)0;
-  uint32 pending_irqs = ~(uint32)0;
   int timer_is_pending = -1;
   int ipi_is_pending = -1;
   uint64 ipi_received = ~0ULL;
@@ -42,10 +40,6 @@ trap_report(enum mmix_trap_class event, const char *cause,
   else if (event == MMIX_TRAP_EXTERNAL)
     event_class = "external";
 
-  if (intc_enabled(&enabled_irqs) != MMIX_INTC_OK)
-    enabled_irqs = ~(uint32)0;
-  if (intc_pending(&pending_irqs) != MMIX_INTC_OK)
-    pending_irqs = ~(uint32)0;
   if (timer_pending(&timer_is_pending) != MMIX_TIMER_OK)
     timer_is_pending = -1;
   if (ipi_pending(&ipi_is_pending) != MMIX_IPI_OK)
@@ -74,8 +68,6 @@ trap_report(enum mmix_trap_class event, const char *cause,
     .ro = state->ro,
     .rs = state->rs,
     .rl = state->rl,
-    .intc_pending = pending_irqs,
-    .intc_enabled = enabled_irqs,
     .intc_claim = claim,
     .timer_pending = timer_is_pending,
     .ipi_pending = ipi_is_pending,
@@ -264,8 +256,6 @@ trapframe_report(int from_user, const char *event_class, const char *cause,
   uint64 sp = 0;
   uint64 address = trapframe->user_state +
                    MMIX_SAVED_GLOBAL_OFFSET(MMIX_ABI_GLOBAL_FIRST);
-  uint32 enabled_irqs = ~(uint32)0;
-  uint32 pending_irqs = ~(uint32)0;
   int timer_is_pending = -1;
   int ipi_is_pending = -1;
   uint64 ipi_received = ~0ULL;
@@ -277,10 +267,6 @@ trapframe_report(int from_user, const char *event_class, const char *cause,
   copyin(p->pagetable, (char *)&sp,
          address + (MMIX_ABI_SP - MMIX_ABI_GLOBAL_FIRST) * sizeof(uint64),
          sizeof(sp));
-  if (intc_enabled(&enabled_irqs) != MMIX_INTC_OK)
-    enabled_irqs = ~(uint32)0;
-  if (intc_pending(&pending_irqs) != MMIX_INTC_OK)
-    pending_irqs = ~(uint32)0;
   if (timer_pending(&timer_is_pending) != MMIX_TIMER_OK)
     timer_is_pending = -1;
   if (ipi_pending(&ipi_is_pending) != MMIX_IPI_OK)
@@ -309,8 +295,6 @@ trapframe_report(int from_user, const char *event_class, const char *cause,
     .ro = 0,
     .rs = 0,
     .rl = 0,
-    .intc_pending = pending_irqs,
-    .intc_enabled = enabled_irqs,
     .intc_claim = claim,
     .timer_pending = timer_is_pending,
     .ipi_pending = ipi_is_pending,
@@ -616,7 +600,7 @@ usertrapret(void)
   struct proc *p;
   struct trapframe *trapframe;
   uint64 alias;
-  uint32 enabled_irqs;
+  uint64 enabled_irqs;
   uint32 timer_irq_number;
 
   mmix_intr_mask_write(0);
@@ -629,8 +613,9 @@ usertrapret(void)
   if (killed(p))
     kexit(-1);
   if (timer_irq(&timer_irq_number) != MMIX_TIMER_OK ||
-      intc_enabled(&enabled_irqs) != MMIX_INTC_OK ||
-      (enabled_irqs & (1U << timer_irq_number)) == 0)
+      intc_enabled(timer_irq_number / INTC_WORD_BITS, &enabled_irqs) !=
+        MMIX_INTC_OK ||
+      (enabled_irqs & (1ULL << (timer_irq_number % INTC_WORD_BITS))) == 0)
     panic("user return timer");
   trapframe = p->trapframe;
   if (trapframe == 0 || !kalloc_page_is_managed(trapframe) ||

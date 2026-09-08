@@ -22,8 +22,6 @@ struct mmix_trap_diagnostic {
   uint64 ro;
   uint64 rs;
   uint64 rl;
-  uint32 intc_pending;
-  uint32 intc_enabled;
   uint32 intc_claim;
   int timer_pending;
   int ipi_pending;

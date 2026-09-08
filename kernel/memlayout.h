@@ -15,7 +15,7 @@
 
 #define VIRTIO0_BASE 0x0000000010001000
 #define VIRTIO0_SIZE 0x0000000000001000
-#define VIRTIO0_IRQ 2
+#define VIRTIO0_IRQ 2048
 #define VIRTIO_MMIO_COUNT 1
 
 #define FRAMEBUFFER_CONTROL_BASE 0x0000000010002000
@@ -27,13 +27,6 @@
 #define TIMER_SIZE 0x0000000000001000
 #define TIMER_IRQ_BASE 16
 #define TIMER_IRQ_COUNT_MAX MMIX_MAX_CPUS
-
-#define INTC_BASE 0x0000000010004000
-#define INTC_SIZE 0x0000000000002000
-#define INTC_IRQ_COUNT 32
-#define INTC_SHARED_IRQ_FIRST 1
-#define INTC_SHARED_IRQ_LAST 15
-#define INTC_CONTEXT_COUNT 16
 
 #define IPI_BASE 0x0000000010006000
 #define IPI_SIZE 0x0000000000001000
@@ -220,13 +213,8 @@ _Static_assert(VIRTIO0_BASE + VIRTIO0_SIZE <= FRAMEBUFFER_CONTROL_BASE,
 _Static_assert(FRAMEBUFFER_CONTROL_BASE + FRAMEBUFFER_CONTROL_SIZE <=
                    TIMER_BASE,
                "framebuffer control must not overlap the timer");
-_Static_assert(TIMER_BASE + TIMER_SIZE <= INTC_BASE,
-               "timer MMIO range must not overlap the interrupt controller");
-_Static_assert(INTC_BASE + INTC_SIZE == IPI_BASE,
-               "IPI MMIO must follow the interrupt controller");
 _Static_assert(TIMER_IRQ_COUNT_MAX == MMIX_MAX_CPUS &&
-                   IPI_TARGET_COUNT_MAX == MMIX_MAX_CPUS &&
-                   INTC_CONTEXT_COUNT == MMIX_MAX_CPUS,
+                   IPI_TARGET_COUNT_MAX == MMIX_MAX_CPUS,
                "CPU-local devices must cover the maximum topology");
 _Static_assert((KERNEL_LOAD & (MMIX_PAGE_SIZE - 1)) == 0,
                "kernel load address must be page-aligned");

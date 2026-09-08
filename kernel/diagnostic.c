@@ -1,6 +1,7 @@
 #include "boot.h"
 #include "kalloc.h"
 #include "diagnostic.h"
+#include "intc.h"
 #include "platform.h"
 #include "printk.h"
 #include "vm.h"
@@ -198,11 +199,26 @@ diagnostic_trap(const struct mmix_trap_diagnostic *diagnostic)
   diagnostic_put_hex64(diagnostic->rs);
   diagnostic_puts(" rl=");
   diagnostic_put_hex64(diagnostic->rl);
-  diagnostic_puts("\nintc-pending=");
-  diagnostic_put_hex64(diagnostic->intc_pending);
-  diagnostic_puts(" intc-enabled=");
-  diagnostic_put_hex64(diagnostic->intc_enabled);
-  diagnostic_puts(" claim=");
+  // Stream indexed words instead of allocating bitmaps on the trap stack.
+  for (uint32 word = 0; word < INTC_WORD_COUNT; word++) {
+    uint64 pending;
+    uint64 enabled;
+
+    if (intc_pending(word, &pending) != MMIX_INTC_OK ||
+        intc_enabled(word, &enabled) != MMIX_INTC_OK) {
+      diagnostic_puts("\nintc-unavailable");
+      break;
+    }
+    if (word != 0 && pending == 0 && enabled == 0)
+      continue;
+    diagnostic_puts("\nintc-word=");
+    diagnostic_put_u64(word);
+    diagnostic_puts(" pending=");
+    diagnostic_put_hex64(pending);
+    diagnostic_puts(" enabled=");
+    diagnostic_put_hex64(enabled);
+  }
+  diagnostic_puts("\nclaim=");
   diagnostic_put_u64(diagnostic->intc_claim);
   diagnostic_puts(" timer-pending=");
   diagnostic_put_int(diagnostic->timer_pending);

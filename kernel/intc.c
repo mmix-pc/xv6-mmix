@@ -7,13 +7,14 @@
 #include "timer.h"
 
 enum {
-  MMIX_INTC_REGISTER_SIZE = 4,
-  MMIX_INTC_PENDING_OFFSET = 0x0000,
-  MMIX_INTC_CONTEXT_STRIDE = 0x100,
+  MMIX_INTC_REGISTER_SIZE = 8,
+  MMIX_INTC_SOURCE_COUNT_OFFSET = 0x00,
+  MMIX_INTC_CONTEXT_COUNT_OFFSET = 0x08,
+  MMIX_INTC_PENDING_OFFSET = 0x1000,
+  MMIX_INTC_CONTEXT_STRIDE = 0x10000,
   MMIX_INTC_CONTEXT_ENABLE_OFFSET = 0x00,
-  MMIX_INTC_CONTEXT_CLAIM_OFFSET = 0x04,
-  MMIX_INTC_CONTEXT_COMPLETE_OFFSET = 0x08,
-  MMIX_INTC_MAX_IRQ_COUNT = 32,
+  MMIX_INTC_CONTEXT_CLAIM_OFFSET = 0x800,
+  MMIX_INTC_CONTEXT_COMPLETE_OFFSET = 0x808,
   MMIX_INTC_AFFINITY_GENERATION = 1,
 };
 
@@ -24,11 +25,13 @@ struct intc_affinity_state {
 };
 
 static struct intc_affinity_state intc_affinity;
-static uint32 intc_active_claim[MMIX_MAX_CPUS];
+static uint64 intc_active_claim[MMIX_MAX_CPUS];
 static struct platform_intc_config intc_config;
 static uint32 intc_cpu_count;
 static uint32 intc_timer_interrupts[MMIX_MAX_CPUS];
 static uint64 intc_configured;
+static uint32 intc_uart_irq;
+static uint32 intc_virtio_irq;
 
 static int
 intc_configure(void)
@@ -36,6 +39,9 @@ intc_configure(void)
   struct platform_intc_config config;
   uint32 cpu_count;
   uint32 timer_interrupts[MMIX_MAX_CPUS];
+  struct platform_uart_config uart;
+  struct platform_virtio_config virtio;
+  uint64 address;
 
   if (__atomic_load_n(&intc_configured, __ATOMIC_ACQUIRE) != 0)
     return 1;
@@ -47,8 +53,19 @@ intc_configure(void)
        (MMIX_INTC_REGISTER_SIZE - 1)) != 0 ||
       config.context_stride != MMIX_INTC_CONTEXT_STRIDE || cpu_count == 0 ||
       cpu_count > MMIX_MAX_CPUS || config.context_count != cpu_count ||
-      config.source_count <= 1 ||
-      config.source_count > MMIX_INTC_MAX_IRQ_COUNT)
+      config.source_count != INTC_SOURCE_COUNT ||
+      platform_uart_config(&uart) != PLATFORM_OK ||
+      platform_virtio_config(0, &virtio) != PLATFORM_OK ||
+      uart.interrupt != UART0_IRQ || virtio.interrupt != VIRTIO0_IRQ)
+    return 0;
+  if (mmix_mmio_address(config.physical_global.physical_base,
+                         config.physical_global.size,
+                         MMIX_INTC_SOURCE_COUNT_OFFSET, 8, &address) < 0 ||
+      *(volatile uint64 *)address != config.source_count ||
+      mmix_mmio_address(config.physical_global.physical_base,
+                         config.physical_global.size,
+                         MMIX_INTC_CONTEXT_COUNT_OFFSET, 8, &address) < 0 ||
+      *(volatile uint64 *)address != cpu_count)
     return 0;
   for (uint32 id = 0; id < cpu_count; id++)
     if (platform_timer_interrupt(id, &timer_interrupts[id]) != PLATFORM_OK ||
@@ -58,6 +75,8 @@ intc_configure(void)
 
   intc_config = config;
   intc_cpu_count = cpu_count;
+  intc_uart_irq = uart.interrupt;
+  intc_virtio_irq = virtio.interrupt;
   for (uint32 id = 0; id < cpu_count; id++)
     intc_timer_interrupts[id] = timer_interrupts[id];
   __atomic_store_n(&intc_configured, 1, __ATOMIC_RELEASE);
@@ -110,16 +129,16 @@ intc_context_register(uint64 offset)
   return address;
 }
 
-static uint32
+static uint64
 intc_read(uint64 address)
 {
-  return *(volatile uint32 *)address;
+  return *(volatile uint64 *)address;
 }
 
 static void
-intc_write(uint64 address, uint32 value)
+intc_write(uint64 address, uint64 value)
 {
-  *(volatile uint32 *)address = value;
+  *(volatile uint64 *)address = value;
 }
 
 static int
@@ -149,10 +168,10 @@ intc_current_owns(uint32 irq)
     return 0;
   if (irq == intc_timer_interrupts[id])
     return 1;
-  if (irq == UART0_IRQ)
+  if (irq == intc_uart_irq)
     return __atomic_load_n(&intc_affinity.uart_owner,
                            __ATOMIC_RELAXED) == id;
-  if (irq == VIRTIO0_IRQ)
+  if (irq == intc_virtio_irq)
     return __atomic_load_n(&intc_affinity.virtio_owner,
                            __ATOMIC_RELAXED) == id;
   return 0;
@@ -173,10 +192,15 @@ intc_init(void)
   if (!intc_configure() || !intc_current_valid())
     return MMIX_INTC_BAD_PLATFORM;
 
-  enable = intc_context_register(MMIX_INTC_CONTEXT_ENABLE_OFFSET);
-  intc_write(enable, 0);
-  if (intc_read(enable) != 0)
+  if (intc_active_claim[id] != 0)
     return MMIX_INTC_BAD_STATE;
+  for (uint32 word = 0; word < INTC_WORD_COUNT; word++) {
+    enable = intc_context_register(MMIX_INTC_CONTEXT_ENABLE_OFFSET +
+                                    word * MMIX_INTC_REGISTER_SIZE);
+    intc_write(enable, 0);
+    if (intc_read(enable) != 0)
+      return MMIX_INTC_BAD_STATE;
+  }
   intc_active_claim[id] = 0;
 
   if (id != BOOT_CPU_ID && !intc_affinity_valid())
@@ -187,12 +211,14 @@ intc_init(void)
 int
 intc_publish_affinity(void)
 {
-  uint32 enabled;
+  uint64 enabled;
 
   if (cpuid() != BOOT_CPU_ID || !intc_current_valid() ||
-      intc_enabled(&enabled) != MMIX_INTC_OK || enabled != 0 ||
       __atomic_load_n(&intc_affinity.generation, __ATOMIC_RELAXED) != 0)
     return MMIX_INTC_BAD_STATE;
+  for (uint32 word = 0; word < INTC_WORD_COUNT; word++)
+    if (intc_enabled(word, &enabled) != MMIX_INTC_OK || enabled != 0)
+      return MMIX_INTC_BAD_STATE;
   __atomic_store_n(&intc_affinity.uart_owner, BOOT_CPU_ID,
                    __ATOMIC_RELAXED);
   __atomic_store_n(&intc_affinity.virtio_owner,
@@ -204,26 +230,28 @@ intc_publish_affinity(void)
 }
 
 int
-intc_pending(uint32 *pending)
+intc_pending(uint32 word, uint64 *pending)
 {
-  if (pending == 0)
+  if (pending == 0 || word >= INTC_WORD_COUNT)
     return MMIX_INTC_BAD_ARGUMENT;
   if (!intc_current_valid())
     return MMIX_INTC_BAD_PLATFORM;
 
-  *pending = intc_read(intc_register(MMIX_INTC_PENDING_OFFSET));
+  *pending = intc_read(intc_register(MMIX_INTC_PENDING_OFFSET +
+                                     word * MMIX_INTC_REGISTER_SIZE));
   return MMIX_INTC_OK;
 }
 
 int
-intc_enabled(uint32 *enabled)
+intc_enabled(uint32 word, uint64 *enabled)
 {
-  if (enabled == 0)
+  if (enabled == 0 || word >= INTC_WORD_COUNT)
     return MMIX_INTC_BAD_ARGUMENT;
   if (!intc_current_valid())
     return MMIX_INTC_BAD_PLATFORM;
 
-  *enabled = intc_read(intc_context_register(MMIX_INTC_CONTEXT_ENABLE_OFFSET));
+  *enabled = intc_read(intc_context_register(MMIX_INTC_CONTEXT_ENABLE_OFFSET +
+                                             word * MMIX_INTC_REGISTER_SIZE));
   return MMIX_INTC_OK;
 }
 
@@ -231,8 +259,8 @@ int
 intc_set_enabled(uint32 irq, int enabled)
 {
   uint64 offset;
-  uint32 mask;
-  uint32 value;
+  uint64 mask;
+  uint64 value;
 
   if (!intc_current_valid())
     return MMIX_INTC_BAD_PLATFORM;
@@ -245,8 +273,10 @@ intc_set_enabled(uint32 irq, int enabled)
   if (intc_active_claim[cpuid()] == irq)
     return MMIX_INTC_BAD_STATE;
 
-  offset = intc_context_register(MMIX_INTC_CONTEXT_ENABLE_OFFSET);
-  mask = 1U << irq;
+  offset = intc_context_register(MMIX_INTC_CONTEXT_ENABLE_OFFSET +
+                                  (irq / INTC_WORD_BITS) *
+                                    MMIX_INTC_REGISTER_SIZE);
+  mask = 1ULL << (irq % INTC_WORD_BITS);
   value = intc_read(offset);
   value = enabled ? value | mask : value & ~mask;
   intc_write(offset, value);
@@ -264,9 +294,9 @@ intc_shared_owner(uint32 irq, uint32 *owner)
     return MMIX_INTC_BAD_ARGUMENT;
   if (!intc_config_valid() || !intc_affinity_valid())
     return MMIX_INTC_BAD_PLATFORM;
-  if (irq == UART0_IRQ)
+  if (irq == intc_uart_irq)
     selected = __atomic_load_n(&intc_affinity.uart_owner, __ATOMIC_RELAXED);
-  else if (irq == VIRTIO0_IRQ)
+  else if (irq == intc_virtio_irq)
     selected = __atomic_load_n(&intc_affinity.virtio_owner,
                                __ATOMIC_RELAXED);
   else
@@ -278,28 +308,22 @@ intc_shared_owner(uint32 irq, uint32 *owner)
 }
 
 int
-intc_runtime_mask(uint32 timer_irq, uint32 *mask)
+intc_runtime_mask(uint32 timer_irq, uint32 word, uint64 *mask)
 {
-  uint32 uart_owner;
-  uint32 virtio_owner;
   uint32 expected_timer;
   int id = cpuid();
 
-  if (mask == 0)
+  if (mask == 0 || word >= INTC_WORD_COUNT)
     return MMIX_INTC_BAD_ARGUMENT;
   if (!intc_current_valid() || !intc_affinity_valid())
     return MMIX_INTC_BAD_PLATFORM;
   expected_timer = intc_timer_interrupts[id];
-  if (timer_irq != expected_timer || !intc_irq_valid(timer_irq) ||
-      intc_shared_owner(UART0_IRQ, &uart_owner) != MMIX_INTC_OK ||
-      intc_shared_owner(VIRTIO0_IRQ, &virtio_owner) != MMIX_INTC_OK)
+  if (timer_irq != expected_timer || !intc_irq_valid(timer_irq))
     return MMIX_INTC_BAD_IRQ;
 
-  *mask = 1U << timer_irq;
-  if ((uint32)id == uart_owner)
-    *mask |= 1U << UART0_IRQ;
-  if ((uint32)id == virtio_owner)
-    *mask |= 1U << VIRTIO0_IRQ;
+  // Shared devices opt in explicitly only after their drivers are ready.
+  *mask = word == timer_irq / INTC_WORD_BITS
+            ? 1ULL << (timer_irq % INTC_WORD_BITS) : 0;
   return MMIX_INTC_OK;
 }
 
@@ -307,27 +331,32 @@ int
 intc_enable_runtime(uint32 timer_irq)
 {
   uint64 offset;
-  uint32 current;
-  uint32 expected;
+  uint64 current;
+  uint64 expected;
 
-  if (intc_runtime_mask(timer_irq, &expected) != MMIX_INTC_OK)
+  if (intc_runtime_mask(timer_irq, 0, &expected) != MMIX_INTC_OK)
     return MMIX_INTC_BAD_STATE;
   if (intc_active_claim[cpuid()] != 0)
     return MMIX_INTC_BAD_STATE;
-  offset = intc_context_register(MMIX_INTC_CONTEXT_ENABLE_OFFSET);
-  current = intc_read(offset);
-  if (current != 0)
-    return MMIX_INTC_BAD_STATE;
-  intc_write(offset, expected);
-  if (intc_read(offset) != expected)
-    return MMIX_INTC_BAD_STATE;
+  for (uint32 word = 0; word < INTC_WORD_COUNT; word++)
+    if (intc_enabled(word, &current) != MMIX_INTC_OK || current != 0)
+      return MMIX_INTC_BAD_STATE;
+  for (uint32 word = 0; word < INTC_WORD_COUNT; word++) {
+    if (intc_runtime_mask(timer_irq, word, &expected) != MMIX_INTC_OK)
+      return MMIX_INTC_BAD_STATE;
+    offset = intc_context_register(MMIX_INTC_CONTEXT_ENABLE_OFFSET +
+                                    word * MMIX_INTC_REGISTER_SIZE);
+    intc_write(offset, expected);
+    if (intc_read(offset) != expected)
+      return MMIX_INTC_BAD_STATE;
+  }
   return MMIX_INTC_OK;
 }
 
 int
 intc_claim(uint32 *irq)
 {
-  uint32 claimed;
+  uint64 claimed;
   int id = cpuid();
 
   if (irq == 0)
@@ -338,12 +367,14 @@ intc_claim(uint32 *irq)
     return MMIX_INTC_BAD_STATE;
 
   claimed = intc_read(intc_context_register(MMIX_INTC_CONTEXT_CLAIM_OFFSET));
-  *irq = claimed;
+  *irq = 0;
   if (claimed == 0)
     return MMIX_INTC_NO_IRQ;
-  if (!intc_irq_valid(claimed))
-    return MMIX_INTC_BAD_IRQ;
+  // Retain even a rejected hardware claim until fatal handling stops this CPU.
   intc_active_claim[id] = claimed;
+  if (claimed >= INTC_SOURCE_COUNT)
+    return MMIX_INTC_BAD_IRQ;
+  *irq = (uint32)claimed;
   if (!intc_current_owns(claimed))
     return MMIX_INTC_BAD_OWNER;
   return MMIX_INTC_OK;
@@ -358,6 +389,8 @@ intc_complete(uint32 irq)
     return MMIX_INTC_BAD_PLATFORM;
   if (!intc_irq_valid(irq))
     return MMIX_INTC_BAD_IRQ;
+  if (!intc_current_owns(irq))
+    return MMIX_INTC_BAD_OWNER;
   if (intc_active_claim[id] != irq)
     return MMIX_INTC_BAD_STATE;
 
@@ -367,13 +400,13 @@ intc_complete(uint32 irq)
 }
 
 _Static_assert((MMIX_INTC_PENDING_OFFSET & (MMIX_INTC_REGISTER_SIZE - 1)) == 0,
-               "MMIX INTC pending register must be tetra-aligned");
+               "MMIX INTC pending register must be octa-aligned");
 _Static_assert((MMIX_INTC_CONTEXT_STRIDE & (MMIX_INTC_REGISTER_SIZE - 1)) == 0,
-               "MMIX INTC contexts must be tetra-aligned");
+               "MMIX INTC contexts must be octa-aligned");
 _Static_assert(
   (MMIX_INTC_CONTEXT_ENABLE_OFFSET & (MMIX_INTC_REGISTER_SIZE - 1)) == 0 &&
     (MMIX_INTC_CONTEXT_CLAIM_OFFSET & (MMIX_INTC_REGISTER_SIZE - 1)) == 0 &&
     (MMIX_INTC_CONTEXT_COMPLETE_OFFSET & (MMIX_INTC_REGISTER_SIZE - 1)) == 0,
-  "MMIX INTC context registers must be tetra-aligned");
+  "MMIX INTC context registers must be octa-aligned");
 _Static_assert(__alignof__(struct intc_affinity_state) == sizeof(uint64),
                "MMIX INTC affinity must be octa-aligned");

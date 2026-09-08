@@ -389,14 +389,14 @@ boot_publish_interrupt_ready(void)
   uint64 stage;
   uint64 entries;
   uint64 returns;
-  uint32 enabled;
-  uint32 expected_enabled;
+  uint64 enabled;
+  uint64 expected_enabled;
   uint32 timer_irq_number;
   struct cpu *c = mycpu();
 
   if (cpu_id >= platform_cpu_count() || c != &cpus[cpu_id] ||
       timer_irq(&timer_irq_number) != MMIX_TIMER_OK ||
-      intc_enabled(&enabled) != MMIX_INTC_OK || !intr_get())
+      !intr_get())
     goto fail;
   push_off();
   stage = __atomic_load_n(&mmix_startup.cpu_stage[cpu_id], __ATOMIC_ACQUIRE);
@@ -411,11 +411,14 @@ boot_publish_interrupt_ready(void)
       intr_get() || (mmix_rk_read() & MMIX_KERNEL_INTERRUPT_MASK) != 0 ||
       c->trap.rk_shadow != mmix_rk_read() || c->trap.active != 0 ||
       c->proc != 0 || c->noff != 1 || c->intena != 1 ||
-      timer_ticks() == 0 || entries == 0 || entries != returns ||
-      intc_runtime_mask(timer_irq_number, &expected_enabled) !=
-        MMIX_INTC_OK ||
-      enabled != expected_enabled)
+      timer_ticks() == 0 || entries == 0 || entries != returns)
     goto fail;
+
+  for (uint32 word = 0; word < INTC_WORD_COUNT; word++)
+    if (intc_enabled(word, &enabled) != MMIX_INTC_OK ||
+        intc_runtime_mask(timer_irq_number, word, &expected_enabled) !=
+          MMIX_INTC_OK || enabled != expected_enabled)
+      goto fail;
 
   printk("interrupt-ready: cpu=%d timer=%llu noff=%d handlers=%llu/%llu\n",
          (int)cpu_id, (unsigned long long)timer_ticks(), c->noff - 1,

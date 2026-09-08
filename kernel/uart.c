@@ -170,14 +170,15 @@ uartgetc(void)
 static void __attribute__((noreturn))
 uart_fail(char *message)
 {
-  uint32 enabled = 0;
+  uint64 enabled = 0;
   uint32 owner = ~0U;
-  int enabled_status = intc_enabled(&enabled);
+  int enabled_status = intc_enabled(uart_config.interrupt / INTC_WORD_BITS,
+                                     &enabled);
   int owner_status = intc_shared_owner(uart_config.interrupt, &owner);
 
-  printk("uart failure: cpu=%d owner=%u/%d enabled=0x%x/%d "
+  printk("uart failure: cpu=%d owner=%u/%d enabled=0x%llx/%d "
          "ier=0x%x iir=0x%x lsr=0x%x tx=%d output-owner=%u\n",
-         cpuid(), owner, owner_status, enabled, enabled_status,
+         cpuid(), owner, owner_status, (unsigned long long)enabled, enabled_status,
          (unsigned int)uart_read(UART_IER),
          (unsigned int)uart_read(UART_IIR),
          (unsigned int)uart_read(UART_LSR),
@@ -191,7 +192,7 @@ void
 uartenable(void)
 {
   int c;
-  uint32 enabled;
+  uint64 enabled;
   uint32 owner;
 
   if (!runtime_initialized || runtime_enabled || intr_get())
@@ -199,8 +200,9 @@ uartenable(void)
 
   if (intc_shared_owner(uart_config.interrupt, &owner) != MMIX_INTC_OK ||
       owner != (uint32)cpuid() ||
-      intc_enabled(&enabled) != MMIX_INTC_OK ||
-      (enabled & (1U << UART0_IRQ)) == 0)
+      intc_enabled(uart_config.interrupt / INTC_WORD_BITS, &enabled) !=
+        MMIX_INTC_OK ||
+      (enabled & (1ULL << (uart_config.interrupt % INTC_WORD_BITS))) == 0)
     uart_fail("uart affinity");
 
   while ((c = uartgetc()) >= 0)
