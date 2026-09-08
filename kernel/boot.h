@@ -12,6 +12,7 @@ struct mmix_boot_handoff {
   uint64 entry_rl;
   uint64 entry_ro;
   uint64 entry_rs;
+  // Entry provenance only; these ranges may be reclaimed after context entry.
   uint64 software_stack_base;
   uint64 software_stack_top;
 };
@@ -101,6 +102,9 @@ int boot_wait_for_online(void);
 // Boot CPU only, after discovery/online validation and kinit, before kvminit.
 // Returns a physmem_status; the entire copied FDT reservation is released once.
 int boot_reclaim_fdt(void);
+// Boot CPU only, after every online CPU has irreversibly left its entry stack.
+// Returns a physmem_status and publishes the complete linker-owned range once.
+int boot_reclaim_stacks(void);
 int boot_publish_interrupt_ready(void);
 int boot_wait_for_interrupt_ready(void);
 int boot_release_schedulers(void);

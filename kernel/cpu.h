@@ -91,6 +91,8 @@ void cpu_context_enter(void (*)(void)) __attribute__((noreturn));
 // Only the matching CPU may retire its initial stack, from its permanent slot.
 // Returns a physmem_status; successful publication is irreversible.
 int cpu_reclaim_initial_stack(uint32);
+// Acquire the independently published software-bootstrap-stack departure mask.
+uint64 cpu_boot_stack_departures(void);
 
 int cpuid(void);
 struct cpu *mycpu(void);

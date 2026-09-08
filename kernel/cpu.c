@@ -11,6 +11,29 @@
 static void cpu_secondary_idle(uint64) __attribute__((noreturn));
 static void cpu_context_ready(uint64) __attribute__((noreturn));
 static int initial_stack_detached[NCPU];
+static uint64 boot_stack_departures;
+
+uint64
+cpu_boot_stack_departures(void)
+{
+  return __atomic_load_n(&boot_stack_departures, __ATOMIC_ACQUIRE);
+}
+
+static void
+cpu_retire_boot_context(void)
+{
+  uint id = cpuid();
+
+  if (!kcontext_current_valid(&mycpu()->context,
+                              MMIX_CONTEXT_SCHEDULER_SLOT(id)))
+    panic("CPU permanent stack");
+  initial_stack_detached[id] = 1;
+  if (cpu_reclaim_initial_stack(id) != PHYSMEM_OK)
+    panic("CPU initial stack");
+  // This separate acknowledgment proves the software stack was abandoned by
+  // irreversible entry. Copied entry addresses do not keep its pages live.
+  __atomic_fetch_or(&boot_stack_departures, 1ULL << id, __ATOMIC_RELEASE);
+}
 
 int
 cpu_reclaim_initial_stack(uint32 id)
@@ -62,9 +85,7 @@ cpu_context_ready(uint64 ready_address)
 {
   void (*ready)(void) = (void (*)(void))ready_address;
 
-  initial_stack_detached[cpuid()] = 1;
-  if (cpu_reclaim_initial_stack(cpuid()) != PHYSMEM_OK)
-    panic("CPU initial stack");
+  cpu_retire_boot_context();
   ready();
   panic("CPU context returned");
 }
@@ -131,9 +152,7 @@ cpu_secondary_idle(uint64 ready_address)
 {
   void (*ready)(void) = (void (*)(void))ready_address;
 
-  initial_stack_detached[cpuid()] = 1;
-  if (cpu_reclaim_initial_stack(cpuid()) != PHYSMEM_OK)
-    panic("secondary initial stack");
+  cpu_retire_boot_context();
   ready();
   if (boot_wait_for_scheduler_release() < 0)
     panic("scheduler release");

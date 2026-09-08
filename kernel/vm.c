@@ -1308,11 +1308,7 @@ kernel_pagetable_audit(pagetable_t pagetable,
         pagetable, (uint64)&mmix_startup.cpu_stage[MMIX_MAX_CPUS - 1],
         PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, (uint64)&kernel_pagetable, PTE_R | PTE_W) <
-        0 ||
-      require_identity(pagetable, (uint64)kernel_boot_stacks_start,
-                       PTE_R | PTE_W) < 0 ||
-      require_identity(pagetable, (uint64)kernel_boot_stacks_end - PGSIZE,
-                       PTE_R | PTE_W) < 0)
+        0)
     return -1;
 
   for (uint32 index = 0; index < layout->range_count; index++)

@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "kalloc.h"
+#include "kcontext.h"
 #include "diagnostic.h"
 #include "intc.h"
 #include "ipi.h"
@@ -569,12 +570,21 @@ trapinithart(void)
   c->trap.user_trapframe = 0;
   if (mmix_trap_vector == 0)
     panic("trap state");
-  if (!platform_cpu_initial_stack_contains(cpu_id, ro) ||
-      !platform_cpu_initial_stack_contains(cpu_id, rs))
-    panic("trap register stack");
-  if (sp <= boot_stack_base(cpu_id) + MMIX_TRAP_STACK_RESERVE ||
-      sp > boot_stack_top(cpu_id))
-    panic("trap software stack");
+  if (cpu_boot_stack_departures() & (1ULL << cpu_id)) {
+    uint slot = MMIX_CONTEXT_SCHEDULER_SLOT(cpu_id);
+
+    // Entry-stack addresses are provenance after irreversible context entry.
+    if (!kcontext_current_valid(&c->context, slot) ||
+        sp <= MMIX_CONTEXT_SOFTWARE_STACK_BASE(slot) + MMIX_TRAP_STACK_RESERVE)
+      panic("trap permanent stack");
+  } else {
+    if (!platform_cpu_initial_stack_contains(cpu_id, ro) ||
+        !platform_cpu_initial_stack_contains(cpu_id, rs))
+      panic("trap register stack");
+    if (sp <= boot_stack_base(cpu_id) + MMIX_TRAP_STACK_RESERVE ||
+        sp > boot_stack_top(cpu_id))
+      panic("trap software stack");
+  }
 
   mmix_ra_write(mmix_ra_disable_trips(mmix_ra_read()));
   mmix_rt_write(mmix_trap_vector);

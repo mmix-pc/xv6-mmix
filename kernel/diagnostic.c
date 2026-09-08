@@ -100,6 +100,7 @@ diagnostic_platform_checkpoint(void)
     diagnostic_put_hex64(handoff->entry_ro);
     diagnostic_puts(" rs=");
     diagnostic_put_hex64(handoff->entry_rs);
+    // This is copied entry provenance, not the CPU's current stack or owner.
     diagnostic_puts(" stack=[");
     diagnostic_put_hex64(handoff->software_stack_base);
     diagnostic_puts(", ");

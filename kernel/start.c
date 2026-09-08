@@ -357,6 +357,32 @@ boot_reclaim_fdt(void)
 }
 
 int
+boot_reclaim_stacks(void)
+{
+  struct physmem_release released;
+  struct cpu *c = mycpu();
+  uint64 mask = platform_cpu_mask();
+  int status;
+
+  if (cpuid() != BOOT_CPU_ID || mask == 0 || intr_get() ||
+      c->noff != 0 || c->trap.active != 0 || c->proc != 0 ||
+      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+        MMIX_STARTUP_GLOBAL_READY ||
+      __atomic_load_n(&mmix_startup.online, __ATOMIC_ACQUIRE) != mask ||
+      cpu_boot_stack_departures() != mask ||
+      !kcontext_current_valid(&c->context,
+                              MMIX_CONTEXT_SCHEDULER_SLOT(BOOT_CPU_ID)))
+    return PHYSMEM_NOT_READY;
+
+  // No CPU can return to an entry frame after the complete departure mask.
+  // Keep the whole range reserved until then, including unused CPU slots.
+  status = physmem_release_boot_stacks(&released);
+  if (status == PHYSMEM_OK)
+    kalloc_publish_release(&released);
+  return status;
+}
+
+int
 boot_publish_interrupt_ready(void)
 {
   uint64 cpu_id = cpuid();
