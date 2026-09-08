@@ -9,10 +9,11 @@ enum {
   MMIX_IPI_REGISTER_SIZE = 8,
   MMIX_IPI_ACTIVE_OFFSET = 0x0000,
   MMIX_IPI_SEND_OFFSET = 0x0008,
-  MMIX_IPI_CONTEXT_STRIDE = 0x20,
+  MMIX_IPI_CONTEXT_STRIDE = 0x10000,
   MMIX_IPI_CONTEXT_STATUS_OFFSET = 0x00,
   MMIX_IPI_CONTEXT_CLEAR_OFFSET = 0x08,
   MMIX_IPI_STATUS_PENDING = 1 << 0,
+  MMIX_IPI_REQUEST_BIT = 9,
 };
 
 struct ipi_target_state {
@@ -83,6 +84,8 @@ ipi_configure(void)
 {
   struct platform_ipi_config config;
   uint32 cpu_count;
+  uint64 active_address;
+  uint64 address;
 
   if (__atomic_load_n(&ipi_configured, __ATOMIC_ACQUIRE) != 0)
     return 1;
@@ -93,14 +96,25 @@ ipi_configure(void)
        (MMIX_IPI_REGISTER_SIZE - 1)) != 0 ||
       config.context_stride != MMIX_IPI_CONTEXT_STRIDE || cpu_count == 0 ||
       cpu_count > MMIX_MAX_CPUS || config.context_count != cpu_count ||
-      config.context_count > IPI_TARGET_COUNT_MAX ||
-      config.request_bit != MMIX_RQ_IPI)
+      config.request_bit != MMIX_IPI_REQUEST_BIT)
     return 0;
 
+  // Check both apertures before touching the device, including the last target.
+  if (mmix_mmio_address(config.physical_global.physical_base,
+                        config.physical_global.size, MMIX_IPI_ACTIVE_OFFSET,
+                        MMIX_IPI_REGISTER_SIZE, &active_address) < 0 ||
+      mmix_mmio_address(config.physical_global.physical_base,
+                        config.physical_global.size, MMIX_IPI_SEND_OFFSET,
+                        MMIX_IPI_REGISTER_SIZE, &address) < 0 ||
+      mmix_mmio_context_address(config.physical_contexts.physical_base,
+                                config.physical_contexts.size, cpu_count - 1,
+                                config.context_count, config.context_stride,
+                                MMIX_IPI_CONTEXT_CLEAR_OFFSET,
+                                MMIX_IPI_REGISTER_SIZE, &address) < 0 ||
+      ipi_read(active_address) != (1ULL << cpu_count) - 1)
+    return 0;
   ipi_config = config;
   ipi_cpu_count = cpu_count;
-  if (ipi_read(ipi_register(MMIX_IPI_ACTIVE_OFFSET)) != ipi_active_targets())
-    return 0;
   __atomic_store_n(&ipi_configured, 1, __ATOMIC_RELEASE);
   return 1;
 }
@@ -419,3 +433,7 @@ _Static_assert((MMIX_IPI_ACTIVE_OFFSET & (MMIX_IPI_REGISTER_SIZE - 1)) == 0 &&
                  (MMIX_IPI_CONTEXT_STRIDE &
                   (MMIX_IPI_REGISTER_SIZE - 1)) == 0,
                "MMIX IPI registers must be octa-aligned");
+_Static_assert(MMIX_MAX_CPUS < 64,
+               "IPI active masks must fit in one octa");
+_Static_assert((1ULL << MMIX_IPI_REQUEST_BIT) == MMIX_RQ_IPI,
+               "IPI request bit must match the architectural mask");

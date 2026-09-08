@@ -23,9 +23,6 @@
 // Reserved by the machine ABI; QEMU does not currently connect this source.
 #define FRAMEBUFFER_IRQ 3
 
-#define IPI_BASE 0x0000000010006000
-#define IPI_SIZE 0x0000000000001000
-#define IPI_TARGET_COUNT_MAX MMIX_MAX_CPUS
 #define IPI_REQUEST_MASK 0x0000000000000200
 
 // The current kernel table construction uses the level-1 root directly.
@@ -205,8 +202,6 @@ _Static_assert(UART0_BASE >= MMIO_BASE &&
                "UART MMIO range must not overlap VirtIO");
 _Static_assert(VIRTIO0_BASE + VIRTIO0_SIZE <= FRAMEBUFFER_CONTROL_BASE,
                "VirtIO MMIO range must not overlap framebuffer control");
-_Static_assert(IPI_TARGET_COUNT_MAX == MMIX_MAX_CPUS,
-               "CPU-local devices must cover the maximum topology");
 _Static_assert((KERNEL_LOAD & (MMIX_PAGE_SIZE - 1)) == 0,
                "kernel load address must be page-aligned");
 _Static_assert(MMIX_PAGE_SIZE == (1 << MMIX_PAGE_SHIFT),
