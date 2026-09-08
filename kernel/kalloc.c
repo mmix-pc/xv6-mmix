@@ -3,96 +3,38 @@
 // and pipe buffers. Allocates whole 8192-byte MMIX pages.
 
 #include "mmix.h"
-#include "param.h"
-#include "boot.h"
 #include "kalloc.h"
-#include "platform.h"
+#include "physmem.h"
 #include "spinlock.h"
 #include "defs.h"
-
-extern char kernel_end[]; // First address after the loaded kernel.
-                          // Defined by kernel.ld.
 
 struct run {
   struct run *next;
 };
 
-struct kalloc_zone {
-  struct run *freelist;
-  uint64 free_pages;
-  uint64 managed_pages;
-  int ready;
-};
-
-enum {
-  KALLOC_LOW_ZONE,
-  KALLOC_RECLAIMED_ZONE,
-  KALLOC_HIGH_ZONE,
-  KALLOC_ZONE_COUNT,
-  KALLOC_EAGER_BUDGET_PAGES = 100 * 1024 * 1024 / PGSIZE,
+struct kalloc_span {
+  uint64 start;
+  uint64 limit;
 };
 
 static struct {
   struct spinlock lock;
-  struct kalloc_zone zone[KALLOC_ZONE_COUNT];
+  struct run *freelist;
+  struct kalloc_span spans[PHYSMEM_MAX_SPANS];
+  uint32 span_count;
+  uint64 free_pages;
+  uint64 managed_pages;
+  int ready;
 } kmem;
 
-static uint64
-physical_ram_size(void)
-{
-  struct platform_physical_range ram;
-
-  if (platform_ram(&ram) != PLATFORM_OK)
-    panic("kalloc platform");
-  return ram.size;
-}
-
-static uint64
-high_ram_size(void)
-{
-  uint64 ram_size = physical_ram_size();
-
-  return ram_size > PHYSICAL_LOW_RAM_SIZE
-           ? ram_size - PHYSICAL_LOW_RAM_SIZE
-           : 0;
-}
-
-_Static_assert((100 * 1024 * 1024) % PGSIZE == 0,
-               "eager allocation budget must use whole pages");
-_Static_assert(KALLOC_RECLAIMED_PAGES >= KALLOC_EAGER_BUDGET_PAGES,
-               "minimum general memory must contain the eager budget");
-
 static int
-zone_bounds(int zone, uint64 *start, uint64 *limit)
-{
-  if (zone == KALLOC_LOW_ZONE) {
-    *start = KALLOC_START((uint64)kernel_end);
-    *limit = KALLOC_LOW_LIMIT;
-  } else if (zone == KALLOC_RECLAIMED_ZONE) {
-    *start = KALLOC_RECLAIMED_START;
-    *limit = KALLOC_RECLAIMED_LIMIT;
-  } else if (zone == KALLOC_HIGH_ZONE) {
-    *start = PHYSICAL_HIGH_RAM_BASE;
-    *limit = PHYSICAL_HIGH_RAM_BASE + high_ram_size();
-  } else {
-    return -1;
-  }
-  return 0;
-}
-
-static int
-page_zone(uint64 address)
+span_index_locked(uint64 address)
 {
   if ((address & (PGSIZE - 1)) != 0)
     return -1;
-  for (int zone = 0; zone < KALLOC_ZONE_COUNT; zone++) {
-    uint64 start;
-    uint64 limit;
-
-    if (zone_bounds(zone, &start, &limit) < 0)
-      return -1;
-    if (address >= start && address < limit)
-      return zone;
+  for (uint32 index = 0; index < kmem.span_count; index++) {
+    if (address >= kmem.spans[index].start && address < kmem.spans[index].limit)
+      return index;
   }
   return -1;
 }
@@ -100,146 +42,208 @@ page_zone(uint64 address)
 static void
 allocator_audit_locked(void)
 {
+  struct run *run = kmem.freelist;
   uint64 managed = 0;
+  uint64 free = 0;
 
-  for (int zone = 0; zone < KALLOC_ZONE_COUNT; zone++) {
-    struct kalloc_zone *current = &kmem.zone[zone];
-    struct run *run = current->freelist;
-    uint64 start;
-    uint64 limit;
-    uint64 count = 0;
-
-    if (zone_bounds(zone, &start, &limit) < 0 ||
-        (!current->ready &&
-         (run != 0 || current->free_pages != 0 ||
-          current->managed_pages != 0)))
-      panic("kalloc audit");
-    if (!current->ready)
-      continue;
-    if (current->managed_pages != (limit - start) / PGSIZE ||
-        current->free_pages > current->managed_pages)
-      panic("kalloc audit");
-    while (run != 0 && count <= current->free_pages) {
-      if (page_zone((uint64)run) != zone)
-        panic("kalloc audit");
-      run = run->next;
-      count++;
-    }
-    if (count != current->free_pages)
-      panic("kalloc audit");
-    managed += current->managed_pages;
+  if (!kmem.ready) {
+    if (run != 0 || kmem.span_count != 0 || kmem.free_pages != 0 ||
+        kmem.managed_pages != 0)
+      panic("kalloc unpublished");
+    return;
   }
+  if (kmem.span_count == 0 || kmem.span_count > PHYSMEM_MAX_SPANS)
+    panic("kalloc spans");
+  for (uint32 index = 0; index < kmem.span_count; index++) {
+    const struct kalloc_span *span = &kmem.spans[index];
 
-  if (kmem.zone[KALLOC_LOW_ZONE].ready &&
-      kmem.zone[KALLOC_RECLAIMED_ZONE].ready &&
-      kmem.zone[KALLOC_HIGH_ZONE].ready) {
-    uint64 first = KALLOC_START((uint64)kernel_end);
-    uint64 reserved = first / PGSIZE +
-                      (LOW_RAM_END - KALLOC_LOW_LIMIT) / PGSIZE +
-                      (PHYSICAL_LOW_RAM_END - KALLOC_RECLAIMED_LIMIT) /
-                        PGSIZE;
-    uint64 physical = physical_ram_size() / PGSIZE;
-
-    if (managed > physical || physical - managed != reserved)
-      panic("kalloc topology");
+    if (span->start >= span->limit ||
+        ((span->start | span->limit) & (PGSIZE - 1)) != 0 ||
+        (index != 0 && kmem.spans[index - 1].limit >= span->start))
+      panic("kalloc spans");
+    managed += (span->limit - span->start) / PGSIZE;
   }
+  if (managed != kmem.managed_pages || kmem.free_pages > managed ||
+      managed > physmem_managed_pages())
+    panic("kalloc count");
+  while (run != 0 && free <= kmem.free_pages) {
+    if (span_index_locked((uint64)run) < 0)
+      panic("kalloc freelist");
+    run = run->next;
+    free++;
+  }
+  if (free != kmem.free_pages)
+    panic("kalloc freelist");
+}
+
+static int
+planner_contains(uint64 start, uint64 limit)
+{
+  uint32 count = physmem_span_count();
+
+  for (uint32 index = 0; index < count; index++) {
+    struct physmem_span span;
+
+    if (physmem_span(index, &span) != PHYSMEM_OK)
+      return 0;
+    if (start >= span.physical_base && limit <= span.physical_base + span.size)
+      return 1;
+  }
+  return 0;
 }
 
 static void
-publish_zone(int zone, uint64 start, uint64 limit, char *panic_message,
-             char *repeat_message)
+publish_ranges(const struct physmem_span *ranges, uint32 range_count,
+               uint64 page_count, int initial)
 {
-  uint64 expected;
-  uint64 zone_start;
-  uint64 zone_limit;
+  struct kalloc_span combined[2 * PHYSMEM_MAX_SPANS];
+  struct kalloc_span merged[PHYSMEM_MAX_SPANS];
+  uint32 combined_count;
+  uint32 merged_count = 0;
+  uint64 counted_pages = 0;
 
-  if (zone_bounds(zone, &zone_start, &zone_limit) < 0 ||
-      start != zone_start || limit != zone_limit || start > limit ||
-      (start & (PGSIZE - 1)) != 0 ||
-      (limit & (PGSIZE - 1)) != 0 ||
-      (start != limit &&
-       (page_zone(start) != zone || page_zone(limit - PGSIZE) != zone)))
-    panic(panic_message);
-  expected = (limit - start) / PGSIZE;
+  if (ranges == 0 || range_count == 0 || range_count > PHYSMEM_MAX_SPANS)
+    panic("kalloc publish");
 
   acquire(&kmem.lock);
-  if (kmem.zone[zone].ready || kmem.zone[zone].freelist != 0 ||
-      kmem.zone[zone].free_pages != 0) {
+  if ((initial && kmem.ready) || (!initial && !kmem.ready) ||
+      (!kmem.ready && (kmem.freelist != 0 || kmem.span_count != 0 ||
+                       kmem.free_pages != 0 || kmem.managed_pages != 0))) {
     release(&kmem.lock);
-    panic(repeat_message);
+    panic(initial ? "kinit twice" : "kalloc unpublished");
   }
-
-  if (start == limit) {
-    kmem.zone[zone].ready = 1;
-    allocator_audit_locked();
+  combined_count = kmem.span_count + range_count;
+  if (combined_count > 2 * PHYSMEM_MAX_SPANS) {
     release(&kmem.lock);
-    return;
+    panic("kalloc capacity");
+  }
+  for (uint32 index = 0; index < kmem.span_count; index++)
+    combined[index] = kmem.spans[index];
+  for (uint32 index = 0; index < range_count; index++) {
+    uint64 start = ranges[index].physical_base;
+    uint64 size = ranges[index].size;
+
+    if (size == 0 || size > ~start || ((start | size) & (PGSIZE - 1)) != 0 ||
+        !planner_contains(start, start + size)) {
+      release(&kmem.lock);
+      panic("kalloc range");
+    }
+    combined[kmem.span_count + index] = (struct kalloc_span){
+      .start = start,
+      .limit = start + size,
+    };
+    counted_pages += size / PGSIZE;
+  }
+  if (counted_pages != page_count) {
+    release(&kmem.lock);
+    panic("kalloc pages");
+  }
+  for (uint32 index = 1; index < combined_count; index++) {
+    struct kalloc_span value = combined[index];
+    uint32 position = index;
+
+    while (position != 0 && combined[position - 1].start > value.start) {
+      combined[position] = combined[position - 1];
+      position--;
+    }
+    combined[position] = value;
+  }
+  for (uint32 index = 0; index < combined_count; index++) {
+    const struct kalloc_span *current = &combined[index];
+
+    if (merged_count != 0 && current->start < merged[merged_count - 1].limit) {
+      release(&kmem.lock);
+      panic("kalloc overlap");
+    }
+    if (merged_count != 0 && current->start == merged[merged_count - 1].limit) {
+      merged[merged_count - 1].limit = current->limit;
+      continue;
+    }
+    if (merged_count == PHYSMEM_MAX_SPANS) {
+      release(&kmem.lock);
+      panic("kalloc capacity");
+    }
+    merged[merged_count++] = *current;
   }
 
   // Newly published pages have no dangling references. Link them directly
-  // instead of eagerly filling the whole zone during boot.
-  for (char *page = (char *)start; page < (char *)limit; page += PGSIZE) {
-    struct run *r = (struct run *)page;
+  // instead of filling an entire RAM configuration during boot.
+  for (uint32 index = 0; index < range_count; index++) {
+    uint64 limit = ranges[index].physical_base + ranges[index].size;
 
-    r->next = kmem.zone[zone].freelist;
-    kmem.zone[zone].freelist = r;
-    kmem.zone[zone].free_pages++;
+    for (uint64 address = ranges[index].physical_base; address < limit;
+         address += PGSIZE) {
+      struct run *run = (struct run *)address;
+
+      run->next = kmem.freelist;
+      kmem.freelist = run;
+      kmem.free_pages++;
+    }
   }
-  if (kmem.zone[zone].free_pages != expected) {
-    release(&kmem.lock);
-    panic(panic_message);
-  }
-  kmem.zone[zone].managed_pages = expected;
-  kmem.zone[zone].ready = 1;
+  for (uint32 index = 0; index < merged_count; index++)
+    kmem.spans[index] = merged[index];
+  kmem.span_count = merged_count;
+  kmem.managed_pages += page_count;
+  kmem.ready = 1;
   allocator_audit_locked();
   release(&kmem.lock);
 }
 
 void
-kinit()
+kinit(void)
 {
-  uint64 first = KALLOC_START((uint64)kernel_end);
+  struct physmem_span spans[PHYSMEM_MAX_SPANS];
+  uint32 count;
+  uint64 pages = 0;
+  int status;
 
-  if ((first & (PGSIZE - 1)) != 0 || first < KERNEL_LOAD ||
-      first >= KALLOC_LOW_LIMIT)
-    panic("kinit");
+  if (kmem.ready)
+    panic("kinit twice");
+  status = physmem_init();
+  if (status != PHYSMEM_OK && status != PHYSMEM_ALREADY_INITIALIZED)
+    panic("kinit plan");
+  count = physmem_span_count();
+  if (count == 0 || count > PHYSMEM_MAX_SPANS)
+    panic("kinit spans");
+  for (uint32 index = 0; index < count; index++) {
+    if (physmem_span(index, &spans[index]) != PHYSMEM_OK)
+      panic("kinit span");
+    pages += spans[index].size / PGSIZE;
+  }
+  if (pages != physmem_managed_pages())
+    panic("kinit pages");
 
   initlock(&kmem.lock, "kmem");
-  publish_zone(KALLOC_LOW_ZONE, first, KALLOC_LOW_LIMIT, "kinit",
-               "kinit twice");
+  publish_ranges(spans, count, pages, 1);
 }
 
 void
-kinit_reclaimed(void)
+kalloc_publish_release(const struct physmem_release *released)
 {
-  if (mmix_rv_read() != MMIX_KERNEL_RV)
-    panic("kinit reclaimed");
-
-  publish_zone(KALLOC_RECLAIMED_ZONE, KALLOC_RECLAIMED_START,
-               KALLOC_RECLAIMED_LIMIT, "kinit reclaimed",
-               "kinit reclaimed twice");
-}
-
-void
-kinit_high(void)
-{
-  uint64 high_size = high_ram_size();
-
-  if (mmix_rv_read() != MMIX_KERNEL_RV)
-    panic("kinit high");
-  publish_zone(KALLOC_HIGH_ZONE, PHYSICAL_HIGH_RAM_BASE,
-               PHYSICAL_HIGH_RAM_BASE + high_size,
-               "kinit high", "kinit high twice");
+  if (released == 0)
+    panic("kalloc release");
+  if (released->span_count == 0) {
+    if (released->page_count != 0)
+      panic("kalloc release");
+    acquire(&kmem.lock);
+    if (!kmem.ready) {
+      release(&kmem.lock);
+      panic("kalloc unpublished");
+    }
+    release(&kmem.lock);
+    return;
+  }
+  publish_ranges(released->spans, released->span_count, released->page_count,
+                 0);
 }
 
 int
 kalloc_page_is_managed(void *pa)
 {
   int managed;
-  int zone = page_zone((uint64)pa);
 
   acquire(&kmem.lock);
-  managed = zone >= 0 && kmem.zone[zone].ready;
+  managed = kmem.ready && span_index_locked((uint64)pa) >= 0;
   release(&kmem.lock);
   return managed;
 }
@@ -247,81 +251,75 @@ kalloc_page_is_managed(void *pa)
 int
 kalloc_page_is_dma(void *pa)
 {
-  return page_zone((uint64)pa) == KALLOC_LOW_ZONE;
+  uint64 address = (uint64)pa;
+
+  return address < (1ULL << MMIX_PHYS_BITS) && kalloc_page_is_managed(pa);
 }
 
-// Free the page of physical memory pointed at by pa,
-// which normally should have been returned by a
-// call to kalloc().  (The exception is when
-// initializing an allocator zone.)
+// Free the page of physical memory pointed at by pa, which normally should
+// have been returned by a call to kalloc(). Newly published pages are linked
+// internally and do not pass through this interface.
 void
 kfree(void *pa)
 {
-  struct run *r;
-  int zone = page_zone((uint64)pa);
-
-  if (zone < 0)
-    panic("kfree");
+  struct run *run;
 
   acquire(&kmem.lock);
-  if (!kmem.zone[zone].ready) {
+  if (!kmem.ready || span_index_locked((uint64)pa) < 0) {
     release(&kmem.lock);
-    panic("kfree unpublished");
+    panic("kfree");
   }
   release(&kmem.lock);
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
-  r = (struct run *)pa;
+  run = (struct run *)pa;
 
   acquire(&kmem.lock);
-  if (kmem.zone[zone].free_pages >= kmem.zone[zone].managed_pages) {
+  if (kmem.free_pages >= kmem.managed_pages) {
     release(&kmem.lock);
     panic("kfree count");
   }
-  r->next = kmem.zone[zone].freelist;
-  kmem.zone[zone].freelist = r;
-  kmem.zone[zone].free_pages++;
+  run->next = kmem.freelist;
+  kmem.freelist = run;
+  kmem.free_pages++;
   release(&kmem.lock);
 }
 
 static struct run *
-alloc_from_zone(struct kalloc_zone *zone)
+alloc_page_locked(int dma_only)
 {
-  struct run *r = zone->freelist;
+  struct run **link = &kmem.freelist;
 
-  if ((r == 0) != (zone->free_pages == 0))
-    panic("kalloc freelist");
-  if (r != 0) {
-    zone->freelist = r->next;
-    zone->free_pages--;
-  }
-  return r;
+  while (*link != 0 && dma_only && (uint64)*link >= (1ULL << MMIX_PHYS_BITS))
+    link = &(*link)->next;
+  if (*link == 0)
+    return 0;
+  struct run *run = *link;
+  *link = run->next;
+  kmem.free_pages--;
+  return run;
 }
 
 static void *
 kalloc_from(int dma_only)
 {
-  struct run *r;
+  struct run *run;
 
   acquire(&kmem.lock);
-  if (!dma_only && kmem.zone[KALLOC_HIGH_ZONE].ready)
-    r = alloc_from_zone(&kmem.zone[KALLOC_HIGH_ZONE]);
-  else
-    r = 0;
-  if (r == 0 && !dma_only && kmem.zone[KALLOC_RECLAIMED_ZONE].ready)
-    r = alloc_from_zone(&kmem.zone[KALLOC_RECLAIMED_ZONE]);
-  if (r == 0)
-    r = alloc_from_zone(&kmem.zone[KALLOC_LOW_ZONE]);
+  if (!kmem.ready) {
+    release(&kmem.lock);
+    panic("kalloc unpublished");
+  }
+  run = alloc_page_locked(dma_only);
   release(&kmem.lock);
 
-  if (r != 0)
-    memset((char *)r, 5, PGSIZE); // fill with junk
-  return (void *)r;
+  if (run != 0)
+    memset((char *)run, 5, PGSIZE); // fill with junk
+  return (void *)run;
 }
 
-// Allocate one 8192-byte MMIX physical page. Prefer High RAM, then reclaimed
-// bare-segment backing, then Low RAM.
+// Allocate one 8192-byte MMIX physical page.
 void *
 kalloc(void)
 {
@@ -336,25 +334,22 @@ kalloc_dma(void)
 }
 
 static void *
-alloc_contiguous_from_zone(struct kalloc_zone *zone, uint64 start,
-                           uint64 limit, uint count)
+alloc_contiguous_locked(uint count)
 {
   struct run *base;
 
-  if (count == 0 || count > (limit - start) / PGSIZE)
-    return 0;
-
-  for (base = zone->freelist; base != 0; base = base->next) {
+  for (base = kmem.freelist; base != 0; base = base->next) {
     uint64 address = (uint64)base;
+    int span = span_index_locked(address);
     uint found = 1;
 
-    if (address < start || address > limit - (uint64)count * PGSIZE)
+    if (span < 0 || count > (kmem.spans[span].limit - address) / PGSIZE)
       continue;
     for (uint page = 1; page < count; page++) {
       struct run *candidate;
       uint64 wanted = address + (uint64)page * PGSIZE;
 
-      for (candidate = zone->freelist; candidate != 0;
+      for (candidate = kmem.freelist; candidate != 0;
            candidate = candidate->next)
         if ((uint64)candidate == wanted)
           break;
@@ -367,55 +362,34 @@ alloc_contiguous_from_zone(struct kalloc_zone *zone, uint64 start,
       continue;
 
     for (uint page = 0; page < count; page++) {
-      struct run **link = &zone->freelist;
+      struct run **link = &kmem.freelist;
       uint64 wanted = address + (uint64)page * PGSIZE;
 
       while ((uint64)*link != wanted)
         link = &(*link)->next;
       *link = (*link)->next;
     }
-    zone->free_pages -= count;
+    kmem.free_pages -= count;
     return (void *)address;
   }
   return 0;
 }
 
-// Allocate count physically contiguous pages. This is needed for MMIX rV
-// root blocks, which hardware addresses as one contiguous array. A run never
-// crosses an allocator-zone boundary.
+// Allocate count physically contiguous pages. A run never crosses an
+// unpublished physical-memory interval.
 void *
 kalloc_contiguous(uint count)
 {
-  void *base = 0;
+  void *base;
 
   if (count == 0)
     return 0;
-
   acquire(&kmem.lock);
-  if (kmem.zone[KALLOC_HIGH_ZONE].ready) {
-    uint64 high_start;
-    uint64 high_limit;
-
-    zone_bounds(KALLOC_HIGH_ZONE, &high_start, &high_limit);
-    base = alloc_contiguous_from_zone(&kmem.zone[KALLOC_HIGH_ZONE],
-                                      high_start, high_limit, count);
+  if (!kmem.ready) {
+    release(&kmem.lock);
+    panic("kalloc unpublished");
   }
-  if (base == 0 && kmem.zone[KALLOC_RECLAIMED_ZONE].ready)
-    base = alloc_contiguous_from_zone(&kmem.zone[KALLOC_RECLAIMED_ZONE],
-                                      STACK_PHYS_BASE, STACK_PHYS_END,
-                                      count);
-  if (base == 0 && kmem.zone[KALLOC_RECLAIMED_ZONE].ready)
-    base = alloc_contiguous_from_zone(&kmem.zone[KALLOC_RECLAIMED_ZONE],
-                                      DATA_PHYS_BASE, DATA_PHYS_END,
-                                      count);
-  if (base == 0 && kmem.zone[KALLOC_RECLAIMED_ZONE].ready)
-    base = alloc_contiguous_from_zone(&kmem.zone[KALLOC_RECLAIMED_ZONE],
-                                      POOL_PHYS_BASE, POOL_PHYS_END,
-                                      count);
-  if (base == 0)
-    base = alloc_contiguous_from_zone(&kmem.zone[KALLOC_LOW_ZONE],
-                                      KALLOC_START((uint64)kernel_end),
-                                      KALLOC_LOW_LIMIT, count);
+  base = alloc_contiguous_locked(count);
   release(&kmem.lock);
 
   if (base != 0)
@@ -429,9 +403,11 @@ kalloc_free_pages(void)
   uint64 count;
 
   acquire(&kmem.lock);
-  count = kmem.zone[KALLOC_LOW_ZONE].free_pages +
-          kmem.zone[KALLOC_RECLAIMED_ZONE].free_pages +
-          kmem.zone[KALLOC_HIGH_ZONE].free_pages;
+  if (!kmem.ready) {
+    release(&kmem.lock);
+    panic("kalloc unpublished");
+  }
+  count = kmem.free_pages;
   release(&kmem.lock);
   return count;
 }
@@ -444,14 +420,8 @@ kalloc_get_stats(struct kalloc_stats *stats)
 
   acquire(&kmem.lock);
   allocator_audit_locked();
-  stats->physical_pages = physical_ram_size() / PGSIZE;
-  stats->managed_pages = 0;
-  stats->free_pages = 0;
-  for (int zone = 0; zone < KALLOC_ZONE_COUNT; zone++) {
-    stats->managed_pages += kmem.zone[zone].managed_pages;
-    stats->free_pages += kmem.zone[zone].free_pages;
-  }
-  stats->high_managed_pages = kmem.zone[KALLOC_HIGH_ZONE].managed_pages;
-  stats->high_free_pages = kmem.zone[KALLOC_HIGH_ZONE].free_pages;
+  stats->physical_pages = physmem_managed_pages() + physmem_reserved_pages();
+  stats->managed_pages = kmem.managed_pages;
+  stats->free_pages = kmem.free_pages;
   release(&kmem.lock);
 }
