@@ -174,20 +174,18 @@
 // provide privileged direct aliases of physical memory.
 //
 //   0x0000000000000000 +----------------------------------+
-//                      | Unmapped low vectors/tables/gap  |
-//   0x0000000000010000 +----------------------------------+
-//                      | Identity Low RAM                 |
-//   0x0000000006000000 +----------------------------------+
-//                      | Identity bare-segment backing    |
-//   0x000000000e800000 +----------------------------------+
-//                      | Unmapped platform/framebuffer    |
-//   0x0000000010000000 +----------------------------------+
-//                      | Identity-mapped device pages     |
-//   0x0000000010008000 +----------------------------------+
-//                      | Unmapped MMIO aperture           |
-//   0x0000000020000000 +----------------------------------+
-//                      | Optional identity High RAM       |
-//     larger RAM's end +----------------------------------+
+//                      | Unmapped vectors/root tables     |
+//   0x0000000000008000 +----------------------------------+
+//                      | Identity-mapped writable RAM     |
+//   0x0000000000100000 +----------------------------------+ KERNEL_LOAD
+//                      | Kernel text (read/execute)       |
+//      kernel_text_end +----------------------------------+
+//                      | Kernel rodata (read-only)        |
+//    kernel_rodata_end +----------------------------------+
+//                      | Identity-mapped writable RAM     |
+//                      | Active FDT pages are read-only   |
+//                      | Framebuffer pages are unmapped   |
+//      runtime RAM end +----------------------------------+
 //                      | Unmapped                         |
 //   0x000007ffffd76000 +----------------------------------+
 //                      | 65 kernel context slots          |
