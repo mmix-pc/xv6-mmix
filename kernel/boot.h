@@ -79,6 +79,20 @@ struct mmix_startup_control {
 
 extern struct mmix_boot_handoff mmix_boot_handoffs[];
 extern struct mmix_startup_control mmix_startup;
+extern char kernel_boot_stacks_start[];
+extern char kernel_boot_stacks_end[];
+
+static inline uint64
+boot_stack_base(uint64 cpu_id)
+{
+  return (uint64)kernel_boot_stacks_end - (cpu_id + 1) * BOOT_STACK_SIZE;
+}
+
+static inline uint64
+boot_stack_top(uint64 cpu_id)
+{
+  return (uint64)kernel_boot_stacks_end - cpu_id * BOOT_STACK_SIZE;
+}
 
 void start(uint64 startup_cpu_id, uint64 fdt_address, uint64 entry_rl,
            uint64 entry_ro, uint64 entry_rs)

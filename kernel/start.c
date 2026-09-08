@@ -165,8 +165,8 @@ startup_validate_handoffs(uint64 fdt_address)
       startup_fail(MMIX_STARTUP_FAILURE_REGISTER_STACK);
       return -1;
     }
-    if (handoff->software_stack_base != BOOT_STACK_BASE(cpu_id) ||
-        handoff->software_stack_top != BOOT_STACK_TOP(cpu_id) ||
+    if (handoff->software_stack_base != boot_stack_base(cpu_id) ||
+        handoff->software_stack_top != boot_stack_top(cpu_id) ||
         (stage != MMIX_CPU_STAGE_ARRIVED &&
          stage != MMIX_CPU_STAGE_WAIT_GLOBAL)) {
       startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
@@ -568,8 +568,8 @@ start(uint64 startup_cpu_id, uint64 fdt_address, uint64 entry_rl,
   handoff->entry_rl = entry_rl;
   handoff->entry_ro = entry_ro;
   handoff->entry_rs = entry_rs;
-  handoff->software_stack_base = BOOT_STACK_BASE(startup_cpu_id);
-  handoff->software_stack_top = BOOT_STACK_TOP(startup_cpu_id);
+  handoff->software_stack_base = boot_stack_base(startup_cpu_id);
+  handoff->software_stack_top = boot_stack_top(startup_cpu_id);
 
   if (startup_cpu_id == BOOT_CPU_ID)
     early_uart_init();

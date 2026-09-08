@@ -128,16 +128,14 @@
 //   0x0000000000002000 +----------------------------------+
 //                      | Kernel root tables (24 KiB)      |
 //   0x0000000000008000 +----------------------------------+
-//                      | Reserved gap (32 KiB)            |
-//   0x0000000000010000 +----------------------------------+
-//                      | Bootstrap register-stack slots   |
+//                      | Reserved low-address gap         |
 //   0x0000000000100000 +----------------------------------+ KERNEL_LOAD
-//                      | Kernel image                     |
+//                      | Kernel text, data, and BSS       |
+//                      +----------------------------------+
+//                      | Image-owned bootstrap stacks    |
 //                      +----------------------------------+ KALLOC_START(end)
-//                      | Free pages below boot stacks     |
-//   0x0000000005fe0000 +----------------------------------+ KERNEL_LIMIT
-//                      | 16 bootstrap stacks (128 KiB)    |
-//   0x0000000006000000 +----------------------------------+
+//                      | Temporary free-page range       |
+//   0x0000000006000000 +----------------------------------+ KERNEL_LIMIT
 #define MMIX_PAGE_SIZE 0x0000000000002000
 #define MMIX_PAGE_SHIFT 13
 
@@ -165,17 +163,11 @@
 
 #define KERNEL_LOAD 0x0000000000100000
 #define KERNEL_ENTRY KERNEL_LOAD
-#define KERNEL_LIMIT 0x0000000005fe0000
+#define KERNEL_LIMIT LOW_RAM_END
 
 #define BOOT_STACK_SIZE MMIX_PAGE_SIZE
 #define BOOT_STACK_COUNT MMIX_MAX_CPUS
 #define BOOT_STACK_AREA_SIZE (BOOT_STACK_COUNT * BOOT_STACK_SIZE)
-#define BOOT_STACK_AREA_BASE (LOW_RAM_END - BOOT_STACK_AREA_SIZE)
-#define BOOT_STACK_AREA_TOP LOW_RAM_END
-#define BOOT_STACK_BASE(cpu_id)                                             \
-  (BOOT_STACK_AREA_TOP - ((cpu_id) + 1) * BOOT_STACK_SIZE)
-#define BOOT_STACK_TOP(cpu_id)                                              \
-  (BOOT_STACK_AREA_TOP - (cpu_id) * BOOT_STACK_SIZE)
 
 // Kernel virtual address map. Identity ranges map a virtual address to the
 // same physical address. Negative addresses produced by mmix_phys_alias()
@@ -287,7 +279,7 @@
    MMIX_PAGE_SIZE)
 
 #define KALLOC_START(kernel_end) ROUNDUP(kernel_end, MMIX_PAGE_SIZE)
-#define KALLOC_LOW_LIMIT BOOT_STACK_AREA_BASE
+#define KALLOC_LOW_LIMIT LOW_RAM_END
 #define KALLOC_RECLAIMED_START BARE_SEGMENT_BACKING_BASE
 #define KALLOC_RECLAIMED_LIMIT BARE_SEGMENT_BACKING_LIMIT
 #define KALLOC_RECLAIMED_PAGES                                      \
@@ -359,9 +351,8 @@ _Static_assert(IPI_BASE + IPI_SIZE <= MMIO_DEVICE_PAGE_END &&
 
 _Static_assert((KERNEL_LOAD & (MMIX_PAGE_SIZE - 1)) == 0,
                "kernel load address must be page-aligned");
-_Static_assert(KERNEL_LIMIT == KALLOC_LOW_LIMIT &&
-                   KALLOC_LOW_LIMIT == BOOT_STACK_AREA_BASE,
-               "kernel limit must stop at the bootstrap stacks");
+_Static_assert(KERNEL_LIMIT == KALLOC_LOW_LIMIT,
+               "kernel limit must match the temporary allocator limit");
 _Static_assert(MMIX_PAGE_SIZE == (1 << MMIX_PAGE_SHIFT),
                "MMIX page size and shift must agree");
 _Static_assert(MMIX_MAX_CPUS <= 256,
@@ -370,12 +361,6 @@ _Static_assert(BOOT_STACK_SIZE == MMIX_PAGE_SIZE &&
                    BOOT_STACK_COUNT == MMIX_MAX_CPUS &&
                    BOOT_STACK_AREA_SIZE == 0x20000,
                "the kernel must reserve one bootstrap page per CPU");
-_Static_assert(BOOT_STACK_AREA_TOP == LOW_RAM_END &&
-                   BOOT_STACK_AREA_BASE == KERNEL_LIMIT &&
-                   BOOT_STACK_BASE(0) == 0x0000000005ffe000 &&
-                   BOOT_STACK_TOP(MMIX_MAX_CPUS - 1) ==
-                     BOOT_STACK_AREA_BASE + BOOT_STACK_SIZE,
-               "bootstrap stack geometry is invalid");
 _Static_assert(MMIX_CONTEXT_AREA_TOP == 0x0000080000000000 &&
                  MMIX_CONTEXT_AREA_BASE == 0x000007ffffce0000,
                "kernel context window must match the scheduler ABI");

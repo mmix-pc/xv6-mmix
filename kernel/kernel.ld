@@ -30,6 +30,12 @@ SECTIONS
     *(COMMON)
   }
 
+  .boot_stacks (NOLOAD) : ALIGN(0x2000) {
+    kernel_boot_stacks_start = .;
+    . += 0x20000;
+    kernel_boot_stacks_end = .;
+  }
+
   . = ALIGN(0x2000);
   kernel_end = .;
 
@@ -37,8 +43,6 @@ SECTIONS
   kernel_low_vectors_end = 0x00002000;
   kernel_root_tables_start = 0x00002000;
   kernel_root_tables_end = 0x00008000;
-  kernel_boot_stacks_start = 0x05fe0000;
-  kernel_boot_stacks_end = 0x06000000;
 
   ASSERT(_entry == 0x00100000,
          "kernel entry does not match KERNEL_ENTRY")
@@ -82,10 +86,14 @@ SECTIONS
              mmix_trap_vector >= kernel_rodata_end &&
              mmix_trap_vector + 8 <= kernel_end,
          "MMIX trap state is outside kernel writable storage")
-  ASSERT(kernel_end <= kernel_boot_stacks_start,
-         "kernel overlaps the bootstrap stacks")
+  ASSERT(kernel_boot_stacks_start >= ADDR(.bss) + SIZEOF(.bss) &&
+             kernel_boot_stacks_start - (ADDR(.bss) + SIZEOF(.bss)) <
+               0x2000,
+         "MMIX bootstrap stacks do not immediately follow BSS")
   ASSERT(kernel_boot_stacks_end - kernel_boot_stacks_start == 0x20000 &&
-             (kernel_boot_stacks_start & 0x1fff) == 0,
+             (kernel_boot_stacks_start & 0x1fff) == 0 &&
+             kernel_boot_stacks_end == kernel_end &&
+             kernel_end <= 0x08000000,
          "MMIX bootstrap stack reservation is invalid")
   ASSERT(kernel_boot_stacks_start + 1024 <
              kernel_boot_stacks_start + 0x2000,

@@ -1189,8 +1189,9 @@ kernel_pagetable_audit(pagetable_t pagetable)
       require_identity(pagetable, first_free, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, KALLOC_LOW_LIMIT - PGSIZE,
                        PTE_R | PTE_W) < 0 ||
-      require_identity(pagetable, BOOT_STACK_AREA_BASE, PTE_R | PTE_W) < 0 ||
-      require_identity(pagetable, BOOT_STACK_AREA_TOP - PGSIZE,
+      require_identity(pagetable, (uint64)kernel_boot_stacks_start,
+                       PTE_R | PTE_W) < 0 ||
+      require_identity(pagetable, (uint64)kernel_boot_stacks_end - PGSIZE,
                        PTE_R | PTE_W) < 0 ||
       require_identity_permissions(pagetable, POOL_PHYS_BASE,
                                    PTE_R | PTE_W) < 0 ||

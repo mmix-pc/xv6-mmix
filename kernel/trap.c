@@ -572,8 +572,8 @@ trapinithart(void)
   if (!platform_cpu_initial_stack_contains(cpu_id, ro) ||
       !platform_cpu_initial_stack_contains(cpu_id, rs))
     panic("trap register stack");
-  if (sp <= BOOT_STACK_BASE(cpu_id) + MMIX_TRAP_STACK_RESERVE ||
-      sp > BOOT_STACK_TOP(cpu_id))
+  if (sp <= boot_stack_base(cpu_id) + MMIX_TRAP_STACK_RESERVE ||
+      sp > boot_stack_top(cpu_id))
     panic("trap software stack");
 
   mmix_ra_write(mmix_ra_disable_trips(mmix_ra_read()));

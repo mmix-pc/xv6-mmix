@@ -30,7 +30,7 @@ _entry:
         // stable usage-pattern byte therefore carries the kernel CPU ID.
         SLU r236,r231,MMIX_RU_CPU_ID_SHIFT
         PUT rU,r236
-        SETML r254,((BOOT_STACK_AREA_TOP >> 16) & 0xffff)
+        GETA r254,%geta(kernel_boot_stacks_end)
         SLU r236,r231,MMIX_PAGE_SHIFT
         SUBU r254,r254,r236
         PUT rL, 0
