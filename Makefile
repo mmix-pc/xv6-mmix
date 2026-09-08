@@ -22,6 +22,7 @@ OBJS = \
   $K/intc.o \
   $K/timer.o \
   $K/ipi.o \
+  $K/physmem.o \
   $K/kalloc.o \
   $K/spinlock.o \
   $K/sleeplock.o \

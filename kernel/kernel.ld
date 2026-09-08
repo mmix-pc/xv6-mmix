@@ -5,6 +5,7 @@ ENTRY(_entry)
 SECTIONS
 {
   . = 0x00100000;
+  kernel_image_start = .;
 
   .text : ALIGN(0x2000) {
     KEEP(kernel/entry.o(.text))
@@ -46,6 +47,8 @@ SECTIONS
 
   ASSERT(_entry == 0x00100000,
          "kernel entry does not match KERNEL_ENTRY")
+  ASSERT(kernel_image_start == 0x00100000,
+         "kernel image start does not match KERNEL_LOAD")
   ASSERT(kernel_low_vectors_start == 0 &&
              kernel_low_vectors_end - kernel_low_vectors_start == 0x2000,
          "MMIX low vectors must reserve the first physical page")
