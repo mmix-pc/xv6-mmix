@@ -123,9 +123,13 @@ diagnostic_allocator(const struct kalloc_stats *stats)
   diagnostic_puts(" managed-pages=");
   diagnostic_put_u64(stats->managed_pages);
   diagnostic_puts(" reserved-pages=");
-  diagnostic_put_u64(stats->physical_pages - stats->managed_pages);
+  diagnostic_put_u64(stats->reserved_pages);
   diagnostic_puts(" free-pages=");
   diagnostic_put_u64(stats->free_pages);
+  diagnostic_puts(" used-pages=");
+  diagnostic_put_u64(stats->used_pages);
+  diagnostic_puts(" reclaimed-pages=");
+  diagnostic_put_u64(stats->reclaimed_pages);
   diagnostic_puts("\nallocator audit passed\n");
 }
 

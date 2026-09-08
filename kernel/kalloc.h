@@ -7,6 +7,9 @@ struct kalloc_stats {
   uint64 physical_pages;
   uint64 managed_pages;
   uint64 free_pages;
+  uint64 reserved_pages;
+  uint64 used_pages;
+  uint64 reclaimed_pages;
 };
 
 void *kalloc(void);

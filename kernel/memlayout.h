@@ -1,80 +1,12 @@
 #ifndef XV6_MMIX_MEMLAYOUT_H
 #define XV6_MMIX_MEMLAYOUT_H
 
-// QEMU MMIX virt physical memory map. Intervals are half-open and the drawing
-// is not to scale.
-//
-//   0x0000000000000000 +----------------------------------+
-//                      | Low RAM (96 MiB)                 |
-//   0x0000000006000000 +----------------------------------+
-//                      | Pool Segment backing (8 MiB)     |
-//   0x0000000006800000 +----------------------------------+
-//                      | Data Segment backing (64 MiB)    |
-//   0x000000000a800000 +----------------------------------+
-//                      | Stack Segment backing (64 MiB)   |
-//   0x000000000e800000 +----------------------------------+
-//                      | Platform RAM (8 MiB)             |
-//   0x000000000f000000 +----------------------------------+
-//                      | Framebuffer backing (16 MiB)     |
-//   0x0000000010000000 +----------------------------------+ minimum RAM end
-//                      | UART MMIO and reserved gaps      |
-//   0x0000000010001000 +----------------------------------+
-//                      | VirtIO MMIO (4 KiB)              |
-//   0x0000000010002000 +----------------------------------+
-//                      | Framebuffer control (4 KiB)      |
-//   0x0000000010003000 +----------------------------------+
-//                      | Timer MMIO (4 KiB)               |
-//   0x0000000010004000 +----------------------------------+
-//                      | INTC MMIO (8 KiB)                |
-//   0x0000000010006000 +----------------------------------+
-//                      | IPI MMIO (4 KiB)                 |
-//   0x0000000010007000 +----------------------------------+
-//                      | Reserved MMIO page padding       |
-//   0x0000000010008000 +----------------------------------+
-//                      | Reserved MMIO aperture           |
-//   0x0000000020000000 +----------------------------------+
-//                      | Optional High RAM                |
-//     larger RAM's end +----------------------------------+
-#define LOW_RAM_BASE 0x0000000000000000
-#define LOW_RAM_SIZE 0x0000000006000000
-#define LOW_RAM_END (LOW_RAM_BASE + LOW_RAM_SIZE)
-
-#define POOL_LOGICAL_BASE 0x4000000000000000
-#define POOL_PHYS_BASE 0x0000000006000000
-#define POOL_SIZE 0x0000000000800000
-#define POOL_PHYS_END (POOL_PHYS_BASE + POOL_SIZE)
-
-#define DATA_LOGICAL_BASE 0x2000000000000000
-#define DATA_PHYS_BASE 0x0000000006800000
-#define DATA_SIZE 0x0000000004000000
-#define DATA_PHYS_END (DATA_PHYS_BASE + DATA_SIZE)
-
-#define STACK_LOGICAL_BASE 0x6000000000000000
-#define STACK_PHYS_BASE 0x000000000a800000
-#define STACK_SIZE 0x0000000004000000
-#define STACK_PHYS_END (STACK_PHYS_BASE + STACK_SIZE)
-
-// Physical backing for the three bare segments is one adjacent platform
-// interval. Paging maps it as ordinary read/write, non-executable memory;
-// allocator ownership is established separately after rV becomes live.
-#define BARE_SEGMENT_BACKING_BASE POOL_PHYS_BASE
-#define BARE_SEGMENT_BACKING_LIMIT STACK_PHYS_END
-#define BARE_SEGMENT_BACKING_SIZE                                      \
-  (BARE_SEGMENT_BACKING_LIMIT - BARE_SEGMENT_BACKING_BASE)
-
-#define PLATFORM_RAM_BASE 0x000000000e800000
-#define PLATFORM_RAM_SIZE 0x0000000000800000
-#define PLATFORM_RAM_END (PLATFORM_RAM_BASE + PLATFORM_RAM_SIZE)
-
-#define FRAMEBUFFER_BASE 0x000000000f000000
-#define FRAMEBUFFER_SIZE 0x0000000001000000
-#define FRAMEBUFFER_END (FRAMEBUFFER_BASE + FRAMEBUFFER_SIZE)
-
 // The production topology has one boot CPU and up to sixteen configured CPUs.
 #define MMIX_MAX_CPUS 16
 #define BOOT_CPU_ID 0
 
-// QEMU MMIX virt MMIO map. Device register offsets belong to each driver.
+// FIXME: Replace these legacy device constants when the drivers consume the
+// FDT register and interrupt descriptions. Device offsets belong to drivers.
 #define MMIO_BASE 0x0000000010000000
 
 #define UART0_BASE 0x0000000010000000
@@ -108,34 +40,26 @@
 #define IPI_TARGET_COUNT_MAX MMIX_MAX_CPUS
 #define IPI_REQUEST_MASK 0x0000000000000200
 
-// RAM capacity is split around one exclusive 256-MiB MMIO aperture.
-#define RAM_MINIMUM_SIZE 0x0000000010000000
-#define PHYSICAL_LOW_RAM_BASE 0x0000000000000000
-#define PHYSICAL_LOW_RAM_SIZE RAM_MINIMUM_SIZE
-#define PHYSICAL_LOW_RAM_END (PHYSICAL_LOW_RAM_BASE + PHYSICAL_LOW_RAM_SIZE)
-#define MMIO_APERTURE_BASE 0x0000000010000000
-#define MMIO_APERTURE_SIZE 0x0000000010000000
-#define MMIO_APERTURE_END (MMIO_APERTURE_BASE + MMIO_APERTURE_SIZE)
-#define PHYSICAL_HIGH_RAM_BASE MMIO_APERTURE_END
 // The current kernel table construction uses the level-1 root directly.
 #define KERNEL_IDENTITY_LIMIT 0x0000000200000000
 
-// Bootstrap physical layout within Low RAM. The kernel image ends before the
-// allocator begins; that boundary is supplied by the linker.
+// Bootstrap physical layout within contiguous RAM. The linker defines image
+// boundaries; the ownership planner excludes all live reservations.
 //
 //   0x0000000000000000 +----------------------------------+
 //                      | Reserved low-vector page (8 KiB) |
 //   0x0000000000002000 +----------------------------------+
 //                      | Kernel root tables (24 KiB)      |
 //   0x0000000000008000 +----------------------------------+
-//                      | Reserved low-address gap         |
+//                      | Allocator-eligible RAM           |
 //   0x0000000000100000 +----------------------------------+ KERNEL_LOAD
 //                      | Kernel text, data, and BSS       |
 //                      +----------------------------------+
 //                      | Image-owned bootstrap stacks    |
-//                      +----------------------------------+ KALLOC_START(end)
-//                      | Temporary free-page range       |
-//   0x0000000006000000 +----------------------------------+ KERNEL_LIMIT
+//                      +----------------------------------+ kernel_end
+//                      | RAM minus live FDT/stack/device  |
+//                      | reservations discovered at boot  |
+//      runtime RAM end +----------------------------------+
 #define MMIX_PAGE_SIZE 0x0000000000002000
 #define MMIX_PAGE_SHIFT 13
 
@@ -144,13 +68,9 @@
   (((value) + (alignment) - 1) & ~((alignment) - 1))
 #define ROUNDDOWN(value, alignment) ((value) & ~((alignment) - 1))
 
-// MMIX pages containing declared device registers are mapped in full. The
-// rest of the MMIO aperture remains unmapped.
-#define MMIO_DEVICE_PAGE_END ROUNDUP(IPI_BASE + IPI_SIZE, MMIX_PAGE_SIZE)
-
 // Reserve the first physical page for MMIX's fixed low TRIP vectors. The
 // kernel does not map the corresponding virtual page until TRIP support exists.
-#define MMIX_LOW_VECTOR_BASE LOW_RAM_BASE
+#define MMIX_LOW_VECTOR_BASE 0
 #define MMIX_LOW_VECTOR_SIZE MMIX_PAGE_SIZE
 #define MMIX_LOW_VECTOR_LIMIT (MMIX_LOW_VECTOR_BASE + MMIX_LOW_VECTOR_SIZE)
 
@@ -163,7 +83,8 @@
 
 #define KERNEL_LOAD 0x0000000000100000
 #define KERNEL_ENTRY KERNEL_LOAD
-#define KERNEL_LIMIT LOW_RAM_END
+// Image ceiling matches the linker limit and the minimum 128-MiB RAM size.
+#define KERNEL_LIMIT 0x0000000008000000
 
 #define BOOT_STACK_SIZE MMIX_PAGE_SIZE
 #define BOOT_STACK_COUNT MMIX_MAX_CPUS
@@ -187,8 +108,8 @@
 //                      | Framebuffer pages are unmapped   |
 //      runtime RAM end +----------------------------------+
 //                      | Unmapped                         |
-//   0x000007ffffd76000 +----------------------------------+
-//                      | 65 kernel context slots          |
+//   0x000007ffffce0000 +----------------------------------+
+//                      | 80 kernel context slots          |
 //   0x0000080000000000 +----------------------------------+
 //                      | Unmapped                         |
 //   0x8000000000000000 +----------------------------------+
@@ -276,19 +197,12 @@
   ((MMIX_USER_REGISTER_STACK_TOP - MMIX_USER_REGISTER_STACK_BASE) /       \
    MMIX_PAGE_SIZE)
 
-#define KALLOC_START(kernel_end) ROUNDUP(kernel_end, MMIX_PAGE_SIZE)
-#define KALLOC_LOW_LIMIT LOW_RAM_END
-#define KALLOC_RECLAIMED_START BARE_SEGMENT_BACKING_BASE
-#define KALLOC_RECLAIMED_LIMIT BARE_SEGMENT_BACKING_LIMIT
-#define KALLOC_RECLAIMED_PAGES                                      \
-  ((KALLOC_RECLAIMED_LIMIT - KALLOC_RECLAIMED_START) / MMIX_PAGE_SIZE)
-
 #if !defined(__ASSEMBLER__)
 _Static_assert((MMIX_PAGE_SIZE & (MMIX_PAGE_SIZE - 1)) == 0,
                "MMIX page size must be a power of two");
 _Static_assert((KERNEL_ROOT_BASE & (MMIX_PAGE_SIZE - 1)) == 0,
                "kernel root tables must be page-aligned");
-_Static_assert(MMIX_LOW_VECTOR_BASE == LOW_RAM_BASE &&
+_Static_assert(MMIX_LOW_VECTOR_BASE == 0 &&
                    MMIX_LOW_VECTOR_SIZE == MMIX_PAGE_SIZE,
                "MMIX low vectors must reserve the first physical page");
 _Static_assert(KERNEL_ROOT_BASE == MMIX_LOW_VECTOR_LIMIT,
@@ -298,26 +212,6 @@ _Static_assert(KERNEL_ROOT_SIZE == 0x6000,
 _Static_assert(KERNEL_ROOT_LIMIT <= KERNEL_LOAD,
                "kernel root tables must remain below the kernel image");
 
-_Static_assert(LOW_RAM_END == POOL_PHYS_BASE,
-               "Low RAM must end at Pool Segment backing");
-_Static_assert(POOL_PHYS_END == DATA_PHYS_BASE,
-               "Pool and Data Segment backing must be adjacent");
-_Static_assert(DATA_PHYS_END == STACK_PHYS_BASE,
-               "Data and Stack Segment backing must be adjacent");
-_Static_assert(STACK_PHYS_END == PLATFORM_RAM_BASE,
-               "Stack Segment backing must end at platform RAM");
-_Static_assert(BARE_SEGMENT_BACKING_BASE == LOW_RAM_END &&
-                   BARE_SEGMENT_BACKING_LIMIT == PLATFORM_RAM_BASE &&
-                   BARE_SEGMENT_BACKING_SIZE == 0x0000000008800000,
-               "bare-segment backing interval must remain contiguous");
-_Static_assert((BARE_SEGMENT_BACKING_BASE & (MMIX_PAGE_SIZE - 1)) == 0 &&
-                   (BARE_SEGMENT_BACKING_LIMIT &
-                    (MMIX_PAGE_SIZE - 1)) == 0,
-               "bare-segment backing must use whole MMIX pages");
-_Static_assert(PLATFORM_RAM_END == FRAMEBUFFER_BASE,
-               "platform RAM must end at the framebuffer");
-_Static_assert(FRAMEBUFFER_END == MMIO_BASE,
-               "framebuffer memory must end at MMIO");
 _Static_assert(UART0_BASE >= MMIO_BASE &&
                    UART0_BASE + UART0_SIZE <= VIRTIO0_BASE,
                "UART MMIO range must not overlap VirtIO");
@@ -334,23 +228,8 @@ _Static_assert(TIMER_IRQ_COUNT_MAX == MMIX_MAX_CPUS &&
                    IPI_TARGET_COUNT_MAX == MMIX_MAX_CPUS &&
                    INTC_CONTEXT_COUNT == MMIX_MAX_CPUS,
                "CPU-local devices must cover the maximum topology");
-_Static_assert(RAM_MINIMUM_SIZE == FRAMEBUFFER_END &&
-                   (RAM_MINIMUM_SIZE & (MMIX_PAGE_SIZE - 1)) == 0,
-               "minimum RAM must contain the fixed physical platform");
-_Static_assert(PHYSICAL_LOW_RAM_BASE == 0 &&
-                   PHYSICAL_LOW_RAM_END == MMIO_APERTURE_BASE &&
-                   MMIO_APERTURE_END == PHYSICAL_HIGH_RAM_BASE &&
-                   (PHYSICAL_HIGH_RAM_BASE & (MMIX_PAGE_SIZE - 1)) == 0,
-               "physical RAM intervals must surround the MMIO aperture");
-_Static_assert(IPI_BASE + IPI_SIZE <= MMIO_DEVICE_PAGE_END &&
-                   MMIO_DEVICE_PAGE_END <= MMIO_APERTURE_END &&
-                   (MMIO_DEVICE_PAGE_END & (MMIX_PAGE_SIZE - 1)) == 0,
-               "device mappings must fit the MMIO aperture");
-
 _Static_assert((KERNEL_LOAD & (MMIX_PAGE_SIZE - 1)) == 0,
                "kernel load address must be page-aligned");
-_Static_assert(KERNEL_LIMIT == KALLOC_LOW_LIMIT,
-               "kernel limit must match the temporary allocator limit");
 _Static_assert(MMIX_PAGE_SIZE == (1 << MMIX_PAGE_SHIFT),
                "MMIX page size and shift must agree");
 _Static_assert(MMIX_MAX_CPUS <= 256,
@@ -365,8 +244,8 @@ _Static_assert(MMIX_CONTEXT_AREA_TOP == 0x0000080000000000 &&
 _Static_assert(MMIX_CONTEXT_SLOT_STRIDE == 0xa000 &&
                  MMIX_CONTEXT_AREA_SIZE == 0x320000,
                "kernel context slot geometry must match the scheduler ABI");
-_Static_assert(MMIX_CONTEXT_AREA_BASE > MMIO_BASE + INTC_SIZE,
-               "kernel contexts must not overlap identity or device maps");
+_Static_assert(MMIX_CONTEXT_AREA_BASE >= KERNEL_IDENTITY_LIMIT,
+               "kernel contexts must not overlap the RAM identity map");
 _Static_assert((MMIX_CONTEXT_AREA_BASE / 0x800000) ==
                  ((MMIX_CONTEXT_AREA_TOP - 1) / 0x800000),
                "kernel contexts must share one level-1 table span");
@@ -403,14 +282,6 @@ _Static_assert((MMIX_USER_REGISTER_STACK_BASE >> 61) == 3 &&
                  MMIX_USER_REGISTER_GUARD_TOP ==
                    MMIX_USER_REGISTER_STACK_TOP + MMIX_PAGE_SIZE,
                "user register-stack layout must match the user ABI");
-_Static_assert(KALLOC_LOW_LIMIT <= LOW_RAM_END,
-               "Low allocator limit must remain inside Low RAM");
-_Static_assert(KALLOC_START(KERNEL_LOAD) < KALLOC_LOW_LIMIT,
-               "bootstrap allocator range must be non-empty");
-_Static_assert(KALLOC_RECLAIMED_START == POOL_PHYS_BASE &&
-                   KALLOC_RECLAIMED_LIMIT == STACK_PHYS_END &&
-                   KALLOC_RECLAIMED_PAGES == 17408,
-               "reclaimed allocator range must cover the bare segments");
 #endif
 
 #endif

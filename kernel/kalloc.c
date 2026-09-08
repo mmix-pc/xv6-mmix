@@ -24,6 +24,8 @@ static struct {
   uint32 span_count;
   uint64 free_pages;
   uint64 managed_pages;
+  uint64 physical_pages;
+  uint64 initial_pages;
   int ready;
 } kmem;
 
@@ -184,6 +186,10 @@ publish_ranges(const struct physmem_span *ranges, uint32 range_count,
     kmem.spans[index] = merged[index];
   kmem.span_count = merged_count;
   kmem.managed_pages += page_count;
+  if (initial) {
+    kmem.initial_pages = page_count;
+    kmem.physical_pages = page_count + physmem_reserved_pages();
+  }
   kmem.ready = 1;
   allocator_audit_locked();
   release(&kmem.lock);
@@ -420,8 +426,11 @@ kalloc_get_stats(struct kalloc_stats *stats)
 
   acquire(&kmem.lock);
   allocator_audit_locked();
-  stats->physical_pages = physmem_managed_pages() + physmem_reserved_pages();
+  stats->physical_pages = kmem.physical_pages;
   stats->managed_pages = kmem.managed_pages;
   stats->free_pages = kmem.free_pages;
+  stats->reserved_pages = kmem.physical_pages - kmem.managed_pages;
+  stats->used_pages = kmem.managed_pages - kmem.free_pages;
+  stats->reclaimed_pages = kmem.managed_pages - kmem.initial_pages;
   release(&kmem.lock);
 }

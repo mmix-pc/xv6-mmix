@@ -209,13 +209,29 @@ virtio_read_capacity(void)
   virtio_fail("virtio config change");
 }
 
+static int
+virtio_dma_range_valid(uint64 address, uint64 length)
+{
+  struct platform_physical_range ram;
+  uint64 limit = address + length;
+  uint64 ram_limit;
+
+  if (length == 0 || limit < address ||
+      (address & MMIX_PHYSICAL_ALIAS_BIT) != 0 ||
+      limit > (1ULL << MMIX_PHYS_BITS) ||
+      platform_ram(&ram) != PLATFORM_OK || ram.size > ~ram.physical_base)
+    return 0;
+  ram_limit = ram.physical_base + ram.size;
+  return address >= ram.physical_base && limit <= ram_limit;
+}
+
 static uint64
 virtio_dma_page_address(void *page)
 {
   uint64 address = (uint64)page;
 
   if (!kalloc_page_is_dma(page) || (address & (PGSIZE - 1)) != 0 ||
-      (address & MMIX_PHYSICAL_ALIAS_BIT) != 0 || address >= LOW_RAM_END)
+      !virtio_dma_range_valid(address, PGSIZE))
     virtio_fail("virtio dma page");
   return address;
 }
@@ -230,7 +246,7 @@ virtio_dma_static_address(void *storage, uint length, uint alignment)
       (alignment & (alignment - 1)) != 0 ||
       (address & (alignment - 1)) != 0 || limit < address ||
       address < (uint64)kernel_rodata_end || limit > (uint64)kernel_end ||
-      (address & MMIX_PHYSICAL_ALIAS_BIT) != 0 || limit > LOW_RAM_END)
+      !virtio_dma_range_valid(address, length))
     virtio_fail("virtio dma static");
   return address;
 }
@@ -242,7 +258,7 @@ virtio_dma_sync(uint64 address, uint length, int device_wrote)
 {
   if (length == 0 || (address & (VIRTIO_DMA_SYNC_BYTES - 1)) != 0 ||
       (length & (VIRTIO_DMA_SYNC_BYTES - 1)) != 0 ||
-      address + length < address || address + length > LOW_RAM_END)
+      !virtio_dma_range_valid(address, length))
     virtio_fail("virtio dma sync");
   if (device_wrote)
     address |= MMIX_PHYSICAL_ALIAS_BIT;
@@ -390,8 +406,8 @@ virtio_set_desc(uint index, uint64 address, uint32 length, uint16 flags,
 {
   struct virtq_desc *descriptor;
 
-  if (index >= NUM || disk.free[index] || address + length < address ||
-      address + length > LOW_RAM_END || next >= NUM)
+  if (index >= NUM || disk.free[index] ||
+      !virtio_dma_range_valid(address, length) || next >= NUM)
     virtio_fail("virtio descriptor");
   descriptor = &disk.desc[index];
   virtio_store_le64(descriptor->addr, address);
