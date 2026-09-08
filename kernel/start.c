@@ -14,6 +14,7 @@
 #include "vm.h"
 
 void main(void) __attribute__((noreturn));
+void secondary_main(void) __attribute__((noreturn));
 
 struct mmix_boot_handoff mmix_boot_handoffs[MMIX_MAX_CPUS];
 struct mmix_startup_control mmix_startup;
@@ -254,7 +255,7 @@ secondary_wait_for_global(uint64 cpu_id, uint64 fdt_address)
       startup_set_stage(cpu_id, MMIX_CPU_STAGE_GLOBAL_ACQUIRED);
       if (startup_publish_online(cpu_id) < 0)
         startup_terminal();
-      startup_terminal();
+      secondary_main();
     }
     if (state != MMIX_STARTUP_RESET &&
         state != MMIX_STARTUP_COLLECTING &&
@@ -395,6 +396,8 @@ boot_publish_interrupt_ready(void)
   struct cpu *c = mycpu();
 
   if (cpu_id >= platform_cpu_count() || c != &cpus[cpu_id] ||
+      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+        MMIX_STARTUP_GLOBAL_READY ||
       timer_irq(&timer_irq_number) != MMIX_TIMER_OK ||
       !intr_get())
     goto fail;
@@ -405,9 +408,10 @@ boot_publish_interrupt_ready(void)
   if (stage != MMIX_CPU_STAGE_ONLINE ||
       (__atomic_load_n(&mmix_startup.online, __ATOMIC_ACQUIRE) &
        (1ULL << cpu_id)) == 0 ||
-      (cpu_id != BOOT_CPU_ID &&
-       __atomic_load_n(&mmix_startup.context_transfers[cpu_id],
-                       __ATOMIC_ACQUIRE) != 1) ||
+      __atomic_load_n(&mmix_startup.context_transfers[cpu_id],
+                      __ATOMIC_ACQUIRE) != 1 ||
+      !kcontext_current_valid(&c->context,
+                              MMIX_CONTEXT_SCHEDULER_SLOT(cpu_id)) ||
       intr_get() || (mmix_rk_read() & MMIX_KERNEL_INTERRUPT_MASK) != 0 ||
       c->trap.rk_shadow != mmix_rk_read() || c->trap.active != 0 ||
       c->proc != 0 || c->noff != 1 || c->intena != 1 ||
@@ -425,6 +429,8 @@ boot_publish_interrupt_ready(void)
          (unsigned long long)entries, (unsigned long long)returns);
   if (startup_publish_interrupt_ready(cpu_id) < 0)
     return -1;
+  if (cpu_id != BOOT_CPU_ID)
+    startup_set_stage(cpu_id, MMIX_CPU_STAGE_SECONDARY_IDLE);
   pop_off();
   return 0;
 
@@ -550,18 +556,9 @@ boot_publish_scheduler_ready(void)
   uint64 cpu_id = cpuid();
   uint64 expected_stage = cpu_id == BOOT_CPU_ID ?
     MMIX_CPU_STAGE_SERVICE : MMIX_CPU_STAGE_SECONDARY_IDLE;
-  int memory_only = cpu_id == BOOT_CPU_ID && platform_cpu_count() == 1 &&
-    __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) ==
-      MMIX_STARTUP_GLOBAL_READY && cpu_boot_stack_departures() == 1 &&
-    __atomic_load_n(&mmix_startup.interrupt_ready, __ATOMIC_ACQUIRE) == 0;
-
-  if (memory_only)
-    expected_stage = MMIX_CPU_STAGE_ONLINE;
-
   if (cpu_id >= platform_cpu_count() || c != &cpus[cpu_id] ||
-      (!memory_only &&
-       __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
-         MMIX_STARTUP_SCHEDULER_RELEASED) ||
+      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+        MMIX_STARTUP_SCHEDULER_RELEASED ||
       c->proc != 0 || c->scheduler_entries != 1 ||
       c->scheduler_dispatches != 0 || c->noff != 0 || c->trap.active != 0 ||
       c->trap.user_trapframe != 0 || intr_get() ||
@@ -573,9 +570,6 @@ boot_publish_scheduler_ready(void)
                                    MMIX_CPU_STAGE_SCHEDULER, 0,
                                    __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
     goto fail;
-  if (memory_only)
-    __atomic_store_n(&mmix_startup.state, MMIX_STARTUP_SCHEDULER_RELEASED,
-                     __ATOMIC_RELEASE);
   printk("scheduler-ready: cpu=%d context=%p\n", (int)cpu_id,
          (void *)c->context.state);
   return 0;
