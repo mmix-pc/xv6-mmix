@@ -38,6 +38,8 @@ enum platform_status {
   PLATFORM_BAD_VIRTIO = -22,
   PLATFORM_BAD_FRAMEBUFFER_DEVICE = -23,
   PLATFORM_BAD_DEVICE_REFERENCE = -24,
+  PLATFORM_NOT_READY = -25,
+  PLATFORM_ALREADY_DISCOVERED = -26,
 };
 
 enum platform_reservation_owner {
@@ -50,98 +52,6 @@ enum platform_reservation_lifetime {
   PLATFORM_RESERVATION_UNTIL_PLATFORM_COPIED,
   PLATFORM_RESERVATION_UNTIL_CPU_RELEASED,
   PLATFORM_RESERVATION_DEVICE_LIFETIME,
-};
-
-struct platform_cpu {
-  uint32 id;
-  uint64 initial_register_stack;
-  uint64 initial_register_stack_size;
-};
-
-struct platform_cpu_topology {
-  // All data is copied from the FDT and indexed by the validated CPU ID.
-  uint32 count;
-  struct platform_cpu cpus[NCPU];
-};
-
-struct platform_reservation {
-  uint64 start;
-  uint64 size;
-  enum platform_reservation_owner owner;
-  enum platform_reservation_lifetime lifetime;
-  uint32 cpu_id;
-};
-
-struct platform_memory {
-  uint64 ram_start;
-  uint64 ram_size;
-  uint32 reservation_count;
-  struct platform_reservation reservations[PLATFORM_MAX_RESERVATIONS];
-};
-
-struct platform_mmio_range {
-  uint64 start;
-  uint64 size;
-};
-
-struct platform_interrupt_controller {
-  struct platform_mmio_range global;
-  struct platform_mmio_range contexts;
-  uint32 source_count;
-  uint32 context_count;
-  uint32 context_stride;
-};
-
-struct platform_uart {
-  struct platform_mmio_range registers;
-  uint32 interrupt;
-  uint32 clock_frequency;
-  uint32 baud_rate;
-  uint32 register_shift;
-  uint32 register_width;
-};
-
-struct platform_timer {
-  struct platform_mmio_range global;
-  struct platform_mmio_range contexts;
-  uint32 context_count;
-  uint32 context_stride;
-  uint32 clock_frequency;
-  uint32 interrupts[NCPU];
-};
-
-struct platform_ipi {
-  struct platform_mmio_range global;
-  struct platform_mmio_range contexts;
-  uint32 context_count;
-  uint32 context_stride;
-  uint32 request_bit;
-};
-
-struct platform_virtio_slot {
-  struct platform_mmio_range registers;
-  uint32 interrupt;
-};
-
-struct platform_framebuffer {
-  struct platform_mmio_range control;
-  struct platform_mmio_range memory;
-};
-
-struct platform_devices {
-  struct platform_interrupt_controller interrupt_controller;
-  struct platform_uart uart;
-  struct platform_timer timer;
-  struct platform_ipi ipi;
-  struct platform_virtio_slot virtio[PLATFORM_VIRTIO_SLOTS];
-  uint32 virtio_count;
-  struct platform_framebuffer framebuffer;
-};
-
-struct platform {
-  struct platform_cpu_topology topology;
-  struct platform_memory memory;
-  struct platform_devices devices;
 };
 
 // Public query results are copies. Their addresses and all ranges they contain
@@ -203,10 +113,7 @@ struct platform_framebuffer_config {
 
 struct fdt;
 
-int platform_decode_cpu_topology(const struct fdt *,
-                                 struct platform_cpu_topology *);
-int platform_decode(const struct fdt *, uint64, struct platform *);
-int platform_decode_devices(const struct fdt *, struct platform *);
+int platform_discover(const struct fdt *, uint64);
 
 // Discovery and publication must complete before these queries are used.
 // Aggregate results are copied through output parameters so no internal

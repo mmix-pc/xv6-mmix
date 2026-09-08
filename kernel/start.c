@@ -13,8 +13,6 @@
 
 void main(void) __attribute__((noreturn));
 
-struct platform mmix_platform;
-uint64 mmix_fdt_address;
 struct mmix_boot_handoff mmix_boot_handoffs[MMIX_MAX_CPUS];
 struct mmix_startup_control mmix_startup;
 
@@ -600,10 +598,7 @@ start(uint64 startup_cpu_id, uint64 fdt_address, uint64 entry_rl,
     goto failed;
   decode_status = fdt_open(&fdt, (const void *)fdt_address, FDT_MAX_SIZE);
   if (decode_status != FDT_OK ||
-      (decode_status = platform_decode(
-         &fdt, fdt_address, &mmix_platform)) != PLATFORM_OK ||
-      (decode_status = platform_decode_devices(
-         &fdt, &mmix_platform)) != PLATFORM_OK) {
+      (decode_status = platform_discover(&fdt, fdt_address)) != PLATFORM_OK) {
     startup_fail(MMIX_STARTUP_FAILURE_PLATFORM);
     goto failed;
   }
@@ -613,7 +608,6 @@ start(uint64 startup_cpu_id, uint64 fdt_address, uint64 entry_rl,
       startup_claim_global_initialization() < 0)
     goto failed;
 
-  mmix_fdt_address = fdt_address;
   if (startup_publish_platform() < 0)
     goto failed;
   main();

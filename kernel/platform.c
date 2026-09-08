@@ -3,10 +3,107 @@
 #include "memlayout.h"
 #include "platform.h"
 
-// FIXME: Move this immutable state into the platform module after every
-// consumer uses the query interface.
-extern struct platform mmix_platform;
-extern uint64 mmix_fdt_address;
+struct platform_cpu {
+  uint32 id;
+  uint64 initial_register_stack;
+  uint64 initial_register_stack_size;
+};
+
+struct platform_cpu_topology {
+  uint32 count;
+  struct platform_cpu cpus[NCPU];
+};
+
+struct platform_reservation {
+  uint64 start;
+  uint64 size;
+  enum platform_reservation_owner owner;
+  enum platform_reservation_lifetime lifetime;
+  uint32 cpu_id;
+};
+
+struct platform_memory {
+  uint64 ram_start;
+  uint64 ram_size;
+  uint32 reservation_count;
+  struct platform_reservation reservations[PLATFORM_MAX_RESERVATIONS];
+};
+
+struct platform_mmio_range {
+  uint64 start;
+  uint64 size;
+};
+
+struct platform_interrupt_controller {
+  struct platform_mmio_range global;
+  struct platform_mmio_range contexts;
+  uint32 source_count;
+  uint32 context_count;
+  uint32 context_stride;
+};
+
+struct platform_uart {
+  struct platform_mmio_range registers;
+  uint32 interrupt;
+  uint32 clock_frequency;
+  uint32 baud_rate;
+  uint32 register_shift;
+  uint32 register_width;
+};
+
+struct platform_timer {
+  struct platform_mmio_range global;
+  struct platform_mmio_range contexts;
+  uint32 context_count;
+  uint32 context_stride;
+  uint32 clock_frequency;
+  uint32 interrupts[NCPU];
+};
+
+struct platform_ipi {
+  struct platform_mmio_range global;
+  struct platform_mmio_range contexts;
+  uint32 context_count;
+  uint32 context_stride;
+  uint32 request_bit;
+};
+
+struct platform_virtio_slot {
+  struct platform_mmio_range registers;
+  uint32 interrupt;
+};
+
+struct platform_framebuffer {
+  struct platform_mmio_range control;
+  struct platform_mmio_range memory;
+};
+
+struct platform_devices {
+  struct platform_interrupt_controller interrupt_controller;
+  struct platform_uart uart;
+  struct platform_timer timer;
+  struct platform_ipi ipi;
+  struct platform_virtio_slot virtio[PLATFORM_VIRTIO_SLOTS];
+  uint32 virtio_count;
+  struct platform_framebuffer framebuffer;
+};
+
+struct platform {
+  struct platform_cpu_topology topology;
+  struct platform_memory memory;
+  struct platform_devices devices;
+};
+
+enum platform_discovery_state {
+  PLATFORM_UNDISCOVERED,
+  PLATFORM_DISCOVERING,
+  PLATFORM_PUBLISHED,
+  PLATFORM_DISCOVERY_FAILED,
+};
+
+static struct platform platform_description;
+static uint64 platform_fdt_address;
+static uint64 platform_discovery_state;
 
 enum node_role {
   NODE_OTHER,
@@ -1296,22 +1393,22 @@ normalize_devices(const struct fdt *fdt, const struct device_decoder *decoder,
   return PLATFORM_BAD_FRAMEBUFFER_DEVICE;
 }
 
-int
-platform_decode_cpu_topology(const struct fdt *fdt,
-                             struct platform_cpu_topology *topology)
+static int
+platform_decode_topology(const struct fdt *fdt,
+                         struct topology_decoder *decoder,
+                         struct platform_cpu_topology *topology)
 {
-  struct topology_decoder decoder = { 0 };
   int status;
 
-  if (fdt == 0 || topology == 0)
+  if (fdt == 0 || decoder == 0 || topology == 0)
     return PLATFORM_BAD_ARGUMENT;
-  status = decode_nodes(fdt, &decoder);
+  status = decode_nodes(fdt, decoder);
   if (status != PLATFORM_OK)
     return status;
-  return normalize_topology(fdt, &decoder, topology);
+  return normalize_topology(fdt, decoder, topology);
 }
 
-int
+static int
 platform_decode(const struct fdt *fdt, uint64 fdt_address,
                 struct platform *platform)
 {
@@ -1321,10 +1418,7 @@ platform_decode(const struct fdt *fdt, uint64 fdt_address,
 
   if (fdt == 0 || platform == 0)
     return PLATFORM_BAD_ARGUMENT;
-  status = decode_nodes(fdt, &decoder);
-  if (status != PLATFORM_OK)
-    return status;
-  status = normalize_topology(fdt, &decoder, &result.topology);
+  status = platform_decode_topology(fdt, &decoder, &result.topology);
   if (status != PLATFORM_OK)
     return status;
   status = normalize_memory(fdt, fdt_address, &decoder, &result.topology,
@@ -1335,7 +1429,7 @@ platform_decode(const struct fdt *fdt, uint64 fdt_address,
   return PLATFORM_OK;
 }
 
-int
+static int
 platform_decode_devices(const struct fdt *fdt, struct platform *platform)
 {
   struct device_decoder *decoder = &device_scratch;
@@ -1356,6 +1450,47 @@ platform_decode_devices(const struct fdt *fdt, struct platform *platform)
   return PLATFORM_OK;
 }
 
+static int
+platform_is_published(void)
+{
+  return __atomic_load_n(&platform_discovery_state, __ATOMIC_ACQUIRE) ==
+         PLATFORM_PUBLISHED;
+}
+
+int
+platform_discover(const struct fdt *fdt, uint64 fdt_address)
+{
+  struct platform candidate;
+  uint64 expected = PLATFORM_UNDISCOVERED;
+  int status;
+
+  if (!__atomic_compare_exchange_n(
+        &platform_discovery_state, &expected, PLATFORM_DISCOVERING, 0,
+        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+    return PLATFORM_ALREADY_DISCOVERED;
+  if (fdt == 0 || fdt_address == 0) {
+    status = PLATFORM_BAD_ARGUMENT;
+    goto failed;
+  }
+  status = platform_decode(fdt, fdt_address, &candidate);
+  if (status != PLATFORM_OK)
+    goto failed;
+  status = platform_decode_devices(fdt, &candidate);
+  if (status != PLATFORM_OK)
+    goto failed;
+
+  platform_description = candidate;
+  platform_fdt_address = fdt_address;
+  __atomic_store_n(&platform_discovery_state, PLATFORM_PUBLISHED,
+                   __ATOMIC_RELEASE);
+  return PLATFORM_OK;
+
+failed:
+  __atomic_store_n(&platform_discovery_state, PLATFORM_DISCOVERY_FAILED,
+                   __ATOMIC_RELEASE);
+  return status;
+}
+
 static void
 copy_physical_range(struct platform_physical_range *destination,
                     const struct platform_mmio_range *source)
@@ -1367,13 +1502,13 @@ copy_physical_range(struct platform_physical_range *destination,
 uint64
 platform_fdt_physical_address(void)
 {
-  return mmix_fdt_address;
+  return platform_is_published() ? platform_fdt_address : 0;
 }
 
 uint32
 platform_cpu_count(void)
 {
-  return mmix_platform.topology.count;
+  return platform_is_published() ? platform_description.topology.count : 0;
 }
 
 uint64
@@ -1391,9 +1526,11 @@ platform_cpu_initial_stack(uint32 cpu_id, struct platform_physical_range *stack)
 {
   const struct platform_cpu *cpu;
 
+  if (!platform_is_published())
+    return PLATFORM_NOT_READY;
   if (stack == 0 || cpu_id >= platform_cpu_count())
     return PLATFORM_BAD_ARGUMENT;
-  cpu = &mmix_platform.topology.cpus[cpu_id];
+  cpu = &platform_description.topology.cpus[cpu_id];
   *stack = (struct platform_physical_range){
     .physical_base = cpu->initial_register_stack,
     .size = cpu->initial_register_stack_size,
@@ -1415,11 +1552,13 @@ platform_cpu_initial_stack_contains(uint32 cpu_id, uint64 physical_address)
 int
 platform_ram(struct platform_physical_range *ram)
 {
+  if (!platform_is_published())
+    return PLATFORM_NOT_READY;
   if (ram == 0)
     return PLATFORM_BAD_ARGUMENT;
   *ram = (struct platform_physical_range){
-    .physical_base = mmix_platform.memory.ram_start,
-    .size = mmix_platform.memory.ram_size,
+    .physical_base = platform_description.memory.ram_start,
+    .size = platform_description.memory.ram_size,
   };
   return PLATFORM_OK;
 }
@@ -1427,7 +1566,9 @@ platform_ram(struct platform_physical_range *ram)
 uint32
 platform_reservation_count(void)
 {
-  return mmix_platform.memory.reservation_count;
+  return platform_is_published()
+           ? platform_description.memory.reservation_count
+           : 0;
 }
 
 int
@@ -1435,9 +1576,11 @@ platform_reservation(uint32 index, struct platform_reservation_info *info)
 {
   const struct platform_reservation *reservation;
 
+  if (!platform_is_published())
+    return PLATFORM_NOT_READY;
   if (info == 0 || index >= platform_reservation_count())
     return PLATFORM_BAD_ARGUMENT;
-  reservation = &mmix_platform.memory.reservations[index];
+  reservation = &platform_description.memory.reservations[index];
   *info = (struct platform_reservation_info){
     .physical =
       {
@@ -1456,9 +1599,11 @@ platform_intc_config(struct platform_intc_config *config)
 {
   const struct platform_interrupt_controller *intc;
 
+  if (!platform_is_published())
+    return PLATFORM_NOT_READY;
   if (config == 0)
     return PLATFORM_BAD_ARGUMENT;
-  intc = &mmix_platform.devices.interrupt_controller;
+  intc = &platform_description.devices.interrupt_controller;
   copy_physical_range(&config->physical_global, &intc->global);
   copy_physical_range(&config->physical_contexts, &intc->contexts);
   config->source_count = intc->source_count;
@@ -1472,9 +1617,11 @@ platform_uart_config(struct platform_uart_config *config)
 {
   const struct platform_uart *uart;
 
+  if (!platform_is_published())
+    return PLATFORM_NOT_READY;
   if (config == 0)
     return PLATFORM_BAD_ARGUMENT;
-  uart = &mmix_platform.devices.uart;
+  uart = &platform_description.devices.uart;
   copy_physical_range(&config->physical_registers, &uart->registers);
   config->interrupt = uart->interrupt;
   config->clock_frequency = uart->clock_frequency;
@@ -1489,9 +1636,11 @@ platform_timer_config(struct platform_timer_config *config)
 {
   const struct platform_timer *timer;
 
+  if (!platform_is_published())
+    return PLATFORM_NOT_READY;
   if (config == 0)
     return PLATFORM_BAD_ARGUMENT;
-  timer = &mmix_platform.devices.timer;
+  timer = &platform_description.devices.timer;
   copy_physical_range(&config->physical_global, &timer->global);
   copy_physical_range(&config->physical_contexts, &timer->contexts);
   config->context_count = timer->context_count;
@@ -1503,10 +1652,12 @@ platform_timer_config(struct platform_timer_config *config)
 int
 platform_timer_interrupt(uint32 cpu_id, uint32 *interrupt)
 {
+  if (!platform_is_published())
+    return PLATFORM_NOT_READY;
   if (interrupt == 0 || cpu_id >= platform_cpu_count() ||
-      cpu_id >= mmix_platform.devices.timer.context_count)
+      cpu_id >= platform_description.devices.timer.context_count)
     return PLATFORM_BAD_ARGUMENT;
-  *interrupt = mmix_platform.devices.timer.interrupts[cpu_id];
+  *interrupt = platform_description.devices.timer.interrupts[cpu_id];
   return PLATFORM_OK;
 }
 
@@ -1515,9 +1666,11 @@ platform_ipi_config(struct platform_ipi_config *config)
 {
   const struct platform_ipi *ipi;
 
+  if (!platform_is_published())
+    return PLATFORM_NOT_READY;
   if (config == 0)
     return PLATFORM_BAD_ARGUMENT;
-  ipi = &mmix_platform.devices.ipi;
+  ipi = &platform_description.devices.ipi;
   copy_physical_range(&config->physical_global, &ipi->global);
   copy_physical_range(&config->physical_contexts, &ipi->contexts);
   config->context_count = ipi->context_count;
@@ -1529,7 +1682,9 @@ platform_ipi_config(struct platform_ipi_config *config)
 uint32
 platform_virtio_count(void)
 {
-  return mmix_platform.devices.virtio_count;
+  return platform_is_published()
+           ? platform_description.devices.virtio_count
+           : 0;
 }
 
 int
@@ -1537,9 +1692,11 @@ platform_virtio_config(uint32 slot, struct platform_virtio_config *config)
 {
   const struct platform_virtio_slot *virtio;
 
+  if (!platform_is_published())
+    return PLATFORM_NOT_READY;
   if (config == 0 || slot >= platform_virtio_count())
     return PLATFORM_BAD_ARGUMENT;
-  virtio = &mmix_platform.devices.virtio[slot];
+  virtio = &platform_description.devices.virtio[slot];
   copy_physical_range(&config->physical_registers, &virtio->registers);
   config->interrupt = virtio->interrupt;
   return PLATFORM_OK;
@@ -1550,9 +1707,11 @@ platform_framebuffer_config(struct platform_framebuffer_config *config)
 {
   const struct platform_framebuffer *framebuffer;
 
+  if (!platform_is_published())
+    return PLATFORM_NOT_READY;
   if (config == 0)
     return PLATFORM_BAD_ARGUMENT;
-  framebuffer = &mmix_platform.devices.framebuffer;
+  framebuffer = &platform_description.devices.framebuffer;
   copy_physical_range(&config->physical_control, &framebuffer->control);
   copy_physical_range(&config->physical_memory, &framebuffer->memory);
   return PLATFORM_OK;
