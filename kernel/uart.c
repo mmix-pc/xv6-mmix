@@ -9,8 +9,9 @@
 #include "intc.h"
 #include "platform.h"
 #include "printk.h"
+#include "mmix.h"
 
-// QEMU exposes a byte-spaced 16550-compatible UART at UART0_BASE.
+// QEMU exposes a byte-spaced 16550-compatible UART described by the platform.
 enum {
   UART_THR = 0,
   UART_DLL = 0,
@@ -52,18 +53,28 @@ static uint32 output_owner;
 static uint32 panic_owner;
 static struct platform_uart_config uart_config;
 
+static volatile uint8 *
+uart_register(uint64 offset)
+{
+  uint64 address;
+
+  if (mmix_mmio_address(uart_config.physical_registers.physical_base,
+                         uart_config.physical_registers.size, offset,
+                         sizeof(uint8), &address) < 0)
+    panic("uart register");
+  return (volatile uint8 *)address;
+}
+
 static __attribute__((always_inline)) inline uint8
 uart_read(uint64 offset)
 {
-  return *(volatile uint8 *)(uart_config.physical_registers.physical_base +
-                             (offset << uart_config.register_shift));
+  return *uart_register(offset);
 }
 
 static __attribute__((always_inline)) inline void
 uart_write(uint64 offset, uint8 value)
 {
-  *(volatile uint8 *)(uart_config.physical_registers.physical_base +
-                      (offset << uart_config.register_shift)) = value;
+  *uart_register(offset) = value;
 }
 
 static __attribute__((always_inline)) inline uint8
@@ -139,16 +150,20 @@ void
 uartinit(void)
 {
   struct platform_uart_config config;
+  uint64 address;
 
   if (runtime_initialized || runtime_enabled ||
       intr_get() || platform_uart_config(&config) != PLATFORM_OK ||
-      config.physical_registers.physical_base != UART0_BASE ||
-      config.physical_registers.size <= UART_LSR ||
       config.interrupt != UART0_IRQ ||
       config.clock_frequency != UART_CLOCK_FREQUENCY ||
       config.baud_rate != UART_BAUD_RATE || config.register_shift != 0 ||
-      config.register_width != sizeof(uint8))
+      config.register_width != sizeof(uint8) ||
+      mmix_mmio_address(config.physical_registers.physical_base,
+                         config.physical_registers.size, UART_LSR,
+                         sizeof(uint8), &address) < 0 ||
+      address != EARLY_UART_ALIAS + UART_LSR)
     panic("uart init");
+  // Runtime and lock-independent panic output must address the same UART.
   uart_config = config;
   if (uart_read(UART_LCR) != UART_LCR_EIGHT_BITS)
     panic("uart state");
