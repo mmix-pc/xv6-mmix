@@ -18,6 +18,10 @@ enum mmix_intc_status {
 int intc_validate(void);
 int intc_init(void);
 int intc_publish_affinity(void);
+// CPU 0 binds the prepared disk once, before publishing shared affinity.
+int intc_bind_virtio_irq(uint32 irq);
+// Zero means no disk is bound; storage-free startup needs no transport.
+uint32 intc_virtio_irq(void);
 // Indexed octas cover the full source namespace without a stack snapshot.
 int intc_pending(uint32 word, uint64 *pending);
 int intc_enabled(uint32 word, uint64 *enabled);

@@ -163,7 +163,7 @@ trap_interrupt_dispatch(uint64 rq, uint64 restore_rk, uint64 rxx,
       return "controller complete";
     return 0;
   }
-  if (*claim == VIRTIO0_IRQ) {
+  if (*claim == intc_virtio_irq()) {
     if (intc_shared_owner(*claim, &shared_owner) != MMIX_INTC_OK ||
         cpu_id != (int)shared_owner)
       return "foreign claim";

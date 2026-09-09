@@ -7,6 +7,7 @@
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "boot.h"
+#include "cpu.h"
 #include "kalloc.h"
 #include "platform.h"
 #include "printk.h"
@@ -38,7 +39,7 @@
 #define VIRTIO_BLK_S_UNSUPP 2
 
 extern char kernel_rodata_end[];
-extern char kernel_end[];
+extern char kernel_boot_stacks_start[];
 
 // A dedicated cache-maintenance span prevents device status writes from
 // sharing a synchronized region with driver-only ownership state.
@@ -98,15 +99,38 @@ static int
 virtio_configure(void)
 {
   struct platform_virtio_config config;
+  struct platform_virtio_config selected;
+  uint32 count = platform_virtio_count();
+  int found = 0;
+  uint64 address;
 
-  if (platform_virtio_count() != VIRTIO_MMIO_COUNT ||
-      platform_virtio_config(0, &config) != PLATFORM_OK ||
-      config.physical_registers.physical_base != VIRTIO0_BASE ||
-      config.physical_registers.size <
-        VIRTIO_MMIO_CONFIG + 2 * sizeof(uint32) ||
-      config.interrupt != VIRTIO0_IRQ)
+  if (count == 0 || count > PLATFORM_VIRTIO_SLOTS)
     return -1;
-  virtio_config = config;
+  // Inspect all identities before resetting any transport. FDT order is not
+  // device identity, and empty or unrelated transports are not our devices.
+  for (uint32 i = 0; i < count; i++) {
+    if (platform_virtio_config(i, &config) != PLATFORM_OK ||
+        config.physical_registers.size != VIRTIO_MMIO_REGISTER_SIZE ||
+        mmix_mmio_address(config.physical_registers.physical_base,
+                           config.physical_registers.size,
+                           VIRTIO_MMIO_REGISTER_SIZE - sizeof(uint32),
+                           sizeof(uint32), &address) < 0)
+      return -1;
+    address -= VIRTIO_MMIO_REGISTER_SIZE - sizeof(uint32);
+    if (virtio_bswap32(*(volatile uint32 *)(address +
+                          VIRTIO_MMIO_MAGIC_VALUE)) != VIRTIO_MAGIC)
+      panic("virtio magic");
+    if (virtio_bswap32(*(volatile uint32 *)(address +
+                          VIRTIO_MMIO_DEVICE_ID)) != VIRTIO_BLOCK_DEVICE)
+      continue;
+    if (found)
+      panic("virtio ambiguous block");
+    selected = config;
+    found = 1;
+  }
+  if (!found)
+    panic("virtio missing block");
+  virtio_config = selected;
   virtio_configured = 1;
   return 0;
 }
@@ -114,12 +138,14 @@ virtio_configure(void)
 static volatile uint32 *
 virtio_register(uint offset)
 {
-  if (!virtio_configured || (offset & (sizeof(uint32) - 1)) != 0 ||
-      offset >
-        virtio_config.physical_registers.size - sizeof(uint32))
+  uint64 address;
+
+  if (!virtio_configured ||
+      mmix_mmio_address(virtio_config.physical_registers.physical_base,
+                         virtio_config.physical_registers.size, offset,
+                         sizeof(uint32), &address) < 0)
     panic("virtio register");
-  return (volatile uint32 *)(
-    virtio_config.physical_registers.physical_base + offset);
+  return (volatile uint32 *)address;
 }
 
 // QEMU exposes modern VirtIO MMIO as little-endian 32-bit registers. A native
@@ -245,7 +271,8 @@ virtio_dma_static_address(void *storage, uint length, uint alignment)
   if (length == 0 || alignment == 0 ||
       (alignment & (alignment - 1)) != 0 ||
       (address & (alignment - 1)) != 0 || limit < address ||
-      address < (uint64)kernel_rodata_end || limit > (uint64)kernel_end ||
+      address < (uint64)kernel_rodata_end ||
+      limit > (uint64)kernel_boot_stacks_start ||
       !virtio_dma_range_valid(address, length))
     virtio_fail("virtio dma static");
   return address;
@@ -647,6 +674,8 @@ virtio_disk_init(void)
 
   if (disk.ready)
     panic("virtio duplicate init");
+  if (cpuid() != BOOT_CPU_ID || intr_get())
+    panic("virtio init state");
   if (virtio_configure() < 0)
     panic("virtio platform");
   initlock(&disk.lock, "virtio_disk");
@@ -735,6 +764,8 @@ virtio_disk_init(void)
   // Runtime INTC startup installs the selected IRQ owner after this global
   // device initialization publishes the complete queue.
   virtio_set_status(VIRTIO_CONFIG_S_DRIVER_OK);
+  if (intc_bind_virtio_irq(virtio_config.interrupt) != MMIX_INTC_OK)
+    virtio_fail("virtio interrupt binding");
   disk.ready = 1;
 
   printk("virtio-mmio: magic=%x version=%u device=%u vendor=%x ", magic,

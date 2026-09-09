@@ -31,6 +31,7 @@
 #define VIRTIO_MMIO_QUEUE_DEVICE_HIGH   0x0a4 // write used address bits 63:32
 #define VIRTIO_MMIO_CONFIG_GENERATION   0x0fc // read-only configuration version
 #define VIRTIO_MMIO_CONFIG              0x100 // device-specific config begins here
+#define VIRTIO_MMIO_REGISTER_SIZE       0x200 // standard transport register extent
 
 // Device status bits.
 #define VIRTIO_CONFIG_S_ACKNOWLEDGE       1
