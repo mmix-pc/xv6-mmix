@@ -5,23 +5,8 @@
 #define MMIX_MAX_CPUS 16
 #define BOOT_CPU_ID 0
 
-// FIXME: Replace these legacy device constants when the drivers consume the
-// FDT register and interrupt descriptions. Device offsets belong to drivers.
-#define MMIO_BASE 0x0000000010000000
-
-#define UART0_BASE 0x0000000010000000
-#define UART0_SIZE 0x0000000000000100
+// The machine ABI fixes the UART source; register ranges come from FDT.
 #define UART0_IRQ 1
-
-#define VIRTIO0_BASE 0x0000000010001000
-#define VIRTIO0_SIZE 0x0000000000001000
-#define VIRTIO0_IRQ 2048
-#define VIRTIO_MMIO_COUNT 1
-
-#define FRAMEBUFFER_CONTROL_BASE 0x0000000010002000
-#define FRAMEBUFFER_CONTROL_SIZE 0x0000000000001000
-// Reserved by the machine ABI; QEMU does not currently connect this source.
-#define FRAMEBUFFER_IRQ 3
 
 #define IPI_REQUEST_MASK 0x0000000000000200
 
@@ -197,11 +182,6 @@ _Static_assert(KERNEL_ROOT_SIZE == 0x6000,
 _Static_assert(KERNEL_ROOT_LIMIT <= KERNEL_LOAD,
                "kernel root tables must remain below the kernel image");
 
-_Static_assert(UART0_BASE >= MMIO_BASE &&
-                   UART0_BASE + UART0_SIZE <= VIRTIO0_BASE,
-               "UART MMIO range must not overlap VirtIO");
-_Static_assert(VIRTIO0_BASE + VIRTIO0_SIZE <= FRAMEBUFFER_CONTROL_BASE,
-               "VirtIO MMIO range must not overlap framebuffer control");
 _Static_assert((KERNEL_LOAD & (MMIX_PAGE_SIZE - 1)) == 0,
                "kernel load address must be page-aligned");
 _Static_assert(MMIX_PAGE_SIZE == (1 << MMIX_PAGE_SHIFT),
