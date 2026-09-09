@@ -12,6 +12,7 @@
 #include "intc.h"
 #include "ipi.h"
 #include "timer.h"
+#include "memlayout.h"
 
 void main(void) __attribute__((noreturn));
 void secondary_main(void) __attribute__((noreturn));
@@ -22,6 +23,7 @@ static void
 interrupt_ready(void)
 {
   uint32 irq;
+  uint32 owner;
 
   trapinithart();
   if (intc_init() != MMIX_INTC_OK || timer_init() != MMIX_TIMER_OK ||
@@ -29,6 +31,12 @@ interrupt_ready(void)
       intc_enable_runtime(irq) != MMIX_INTC_OK ||
       timer_arm_next() != MMIX_TIMER_OK)
     panic("local interrupts");
+  // Shared drivers and affinity were published before any CPU reached here.
+  if (intc_shared_owner(UART0_IRQ, &owner) != MMIX_INTC_OK)
+    panic("UART owner");
+  if (owner == (uint32)cpuid()) {
+    uartenable();
+  }
   trapenablehart();
   intr_on();
   while (timer_ticks() == 0)
@@ -55,6 +63,7 @@ kernel_ready(void)
   diagnostic_paging(mmix_rv_read());
   diagnostic_allocator(&stats);
   printk("interrupt-service ready: cpus=%d\n", (int)platform_cpu_count());
+  userinit();
   if (boot_release_schedulers() < 0)
     panic("scheduler release");
   scheduler();
@@ -81,6 +90,7 @@ main(void)
     panic("CPU online");
   diagnostic_platform_checkpoint();
   printkinit();
+  consoleinit();
 
   kinit();
   if (boot_reclaim_fdt() != PHYSMEM_OK)
@@ -90,8 +100,13 @@ main(void)
   kcontext_init();
   procinit();
   trapinit();
-  if (intc_init() != MMIX_INTC_OK ||
-      intc_publish_affinity() != MMIX_INTC_OK ||
+  binit();
+  iinit();
+  fileinit();
+  if (intc_init() != MMIX_INTC_OK)
+    panic("interrupt platform");
+  virtio_disk_init();
+  if (intc_publish_affinity() != MMIX_INTC_OK ||
       timer_validate() != MMIX_TIMER_OK || ipi_validate() != MMIX_IPI_OK)
     panic("interrupt platform");
   __atomic_store_n(&memory_ready, 1, __ATOMIC_RELEASE);

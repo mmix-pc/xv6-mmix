@@ -347,9 +347,19 @@ intc_runtime_mask(uint32 timer_irq, uint32 word, uint64 *mask)
   if (timer_irq != expected_timer || !intc_irq_valid(timer_irq))
     return MMIX_INTC_BAD_IRQ;
 
-  // Shared devices opt in explicitly only after their drivers are ready.
+  // Binding the prepared disk before affinity publication enables shared
+  // service. Each context opens only its own timer and assigned devices.
   *mask = word == timer_irq / INTC_WORD_BITS
             ? 1ULL << (timer_irq % INTC_WORD_BITS) : 0;
+  uint32 disk_irq = intc_virtio_irq();
+  if (disk_irq != 0) {
+    if (intc_current_owns(intc_uart_irq) &&
+        word == intc_uart_irq / INTC_WORD_BITS)
+      *mask |= 1ULL << (intc_uart_irq % INTC_WORD_BITS);
+    if (intc_current_owns(disk_irq) &&
+        word == disk_irq / INTC_WORD_BITS)
+      *mask |= 1ULL << (disk_irq % INTC_WORD_BITS);
+  }
   return MMIX_INTC_OK;
 }
 

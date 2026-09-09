@@ -324,46 +324,87 @@ kalloc_dma(void)
   return kalloc_from(1);
 }
 
+// Sort by descending physical address without allocating memory or recursing.
+// Ordinary page allocation/free keeps its existing constant-time list updates.
+static void
+sort_freelist_locked(void)
+{
+  for (uint64 width = 1; width < kmem.free_pages; width *= 2) {
+    struct run *left = kmem.freelist;
+    struct run *head = 0;
+    struct run **tail = &head;
+
+    while (left != 0) {
+      struct run *right = left;
+      uint64 nleft = 0, nright = width;
+
+      while (nleft < width && right != 0) {
+        right = right->next;
+        nleft++;
+      }
+      while (nleft != 0 || (nright != 0 && right != 0)) {
+        struct run *next;
+
+        if (nleft != 0 && (nright == 0 || right == 0 ||
+                          (uint64)left > (uint64)right)) {
+          next = left;
+          left = left->next;
+          nleft--;
+        } else {
+          next = right;
+          right = right->next;
+          nright--;
+        }
+        *tail = next;
+        tail = &next->next;
+      }
+      left = right;
+    }
+    *tail = 0;
+    kmem.freelist = head;
+  }
+}
+
+// A single pass finds runs already linked in descending address order, as
+// freshly published pages are. After sorting, this finds every possible run.
+static void *
+take_contiguous_locked(uint count)
+{
+  struct run **link = &kmem.freelist;
+  struct run *run = *link;
+  uint length = 0;
+
+  while (run != 0) {
+    length++;
+    if (length == count) {
+      *link = run->next;
+      kmem.free_pages -= count;
+      return run;
+    }
+    if ((uint64)run != (uint64)run->next + PGSIZE) {
+      link = &run->next;
+      length = 0;
+    }
+    run = run->next;
+  }
+  return 0;
+}
+
 static void *
 alloc_contiguous_locked(uint count)
 {
-  struct run *base;
+  void *base;
 
-  for (base = kmem.freelist; base != 0; base = base->next) {
-    uint64 address = (uint64)base;
-    int span = span_index_locked(address);
-    uint found = 1;
+  if (count > kmem.free_pages)
+    return 0;
+  base = take_contiguous_locked(count);
+  if (base != 0)
+    return base;
 
-    if (span < 0 || count > (kmem.spans[span].limit - address) / PGSIZE)
-      continue;
-    for (uint page = 1; page < count; page++) {
-      struct run *candidate;
-      uint64 wanted = address + (uint64)page * PGSIZE;
-
-      for (candidate = kmem.freelist; candidate != 0;
-           candidate = candidate->next)
-        if ((uint64)candidate == wanted)
-          break;
-      if (candidate == 0) {
-        found = 0;
-        break;
-      }
-    }
-    if (!found)
-      continue;
-
-    for (uint page = 0; page < count; page++) {
-      struct run **link = &kmem.freelist;
-      uint64 wanted = address + (uint64)page * PGSIZE;
-
-      while ((uint64)*link != wanted)
-        link = &(*link)->next;
-      *link = (*link)->next;
-    }
-    kmem.free_pages -= count;
-    return (void *)address;
-  }
-  return 0;
+  // Avoid repeated whole-list membership searches with interrupts disabled:
+  // fragmented lists now cost O(n log n), rather than O(n squared).
+  sort_freelist_locked();
+  return take_contiguous_locked(count);
 }
 
 // Allocate count physically contiguous pages. A run never crosses an
