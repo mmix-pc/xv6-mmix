@@ -77,10 +77,11 @@ $K/kernel: $(OBJS) $K/kernel.ld
 $K/%.o: $K/%.S
 	$(CC) $(ASFLAGS) -c -o $@ $<
 
+CPUS ?= 2
 QEMUMEM ?= 256M
 
 QEMUOPTS = -machine virt,elf-startup-abi=linux
-QEMUOPTS += -smp 1
+QEMUOPTS += -smp $(CPUS)
 QEMUOPTS += -m $(QEMUMEM)
 QEMUOPTS += -display none
 QEMUOPTS += -serial stdio

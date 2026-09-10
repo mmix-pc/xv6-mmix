@@ -1,6 +1,7 @@
 xv6 is a re-implementation of Dennis Ritchie's and Ken Thompson's Unix
 Version 6 (v6).  xv6 loosely follows the structure and style of v6,
-but is implemented for a modern RISC-V multiprocessor using ANSI C.
+but is implemented using ANSI C. This repository ports the RISC-V version
+of xv6 to an MMIX multiprocessor.
 
 ACKNOWLEDGMENTS
 
@@ -42,7 +43,12 @@ simplifications and clarifications than new features.
 
 BUILDING AND RUNNING XV6
 
-You will need a RISC-V "newlib" tool chain from
-https://github.com/riscv/riscv-gnu-toolchain, and qemu compiled for
-riscv64-softmmu.  Once they are installed, and in your shell
-search path, you can run "make qemu".
+You will need Clang and LLVM with MMIX ELF support (including ld.lld,
+llvm-objdump, and llvm-readobj), a host C compiler, GNU make, and
+qemu-system-mmix. QEMU must support the virt machine's Linux/FDT startup
+ABI, contiguous RAM, and high-MMIO devices. No external target libc is required.
+
+With the installed tools in your shell search path, run "make qemu".
+The default configuration uses two CPUs, 256 MiB of RAM, and a modern
+VirtIO block device. Use "make qemu CPUS=1" for single-core operation or
+"make qemu QEMUMEM=512M" to change the RAM size.
