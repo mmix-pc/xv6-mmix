@@ -80,7 +80,8 @@ $K/%.o: $K/%.S
 CPUS ?= 2
 QEMUMEM ?= 256M
 
-QEMUOPTS = -machine virt,elf-startup-abi=linux
+QEMUOPTS = -machine virt,elf-startup=platform
+QEMUOPTS += -bios none
 QEMUOPTS += -smp $(CPUS)
 QEMUOPTS += -m $(QEMUMEM)
 QEMUOPTS += -display none
