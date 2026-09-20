@@ -61,7 +61,6 @@
 
 #define MMIX_PTP_SIGN_BIT       0x8000000000000000
 #define MMIX_PTP_C_FIELD_MASK   0x7fffffffffffe000
-#define MMIX_PHYSICAL_ALIAS_BIT 0x8000000000000000
 
 // Kernel translation configuration. b1:b2:b3:b4 = 3:2:1:0 gives segment 0
 // three radix-1024 digits and makes segments 1 through 3 empty. Keep the
@@ -318,6 +317,12 @@ mmix_phys_alias(uint64 pa)
   return MMIX_PHYSICAL_ALIAS_BIT | pa;
 }
 
+static inline uint64
+mmix_alias_phys(uint64 alias)
+{
+  return alias & ~MMIX_PHYSICAL_ALIAS_BIT;
+}
+
 // Callers supply a physical device range from a validated platform query.
 // Direct aliases have 63 physical bits, independent of the 48-bit PTE field.
 // These checks do not map memory or establish device ownership.
@@ -348,18 +353,21 @@ mmix_mmio_context_address(uint64 base, uint64 size, uint32 index,
                            width, address);
 }
 
-// Validate a linked positive trap entry before converting it to the
-// privileged negative physical alias required by rT and rTT.
+// Validate a linked negative-alias trap entry and return it directly. rT and
+// rTT require the privileged negative physical alias of the trap entry.
 static inline int
 mmix_trap_vector_make(uint64 entry, uint64 text_end, uint64 *vector)
 {
-  if (vector == 0 || text_end <= KERNEL_LOAD || text_end > KERNEL_LIMIT ||
-      entry < KERNEL_LOAD || entry >= text_end ||
+  uint64 text_start = mmix_phys_alias(KERNEL_LOAD);
+  uint64 text_limit = mmix_phys_alias(KERNEL_LIMIT);
+
+  if (vector == 0 || text_end <= text_start || text_end > text_limit ||
+      entry < text_start || entry >= text_end ||
       (entry & (MMIX_TRAP_VECTOR_ALIGN - 1)) != 0 ||
-      (entry & MMIX_PHYSICAL_ALIAS_BIT) != 0)
+      (entry & MMIX_PHYSICAL_ALIAS_BIT) == 0)
     return -1;
 
-  *vector = mmix_phys_alias(entry);
+  *vector = entry;
   return 0;
 }
 
@@ -633,6 +641,8 @@ _Static_assert((MMIX_RQ_PROGRAM_MASK & MMIX_KERNEL_INTERRUPT_MASK) == 0 &&
 _Static_assert((KERNEL_LOAD & (MMIX_TRAP_VECTOR_ALIGN - 1)) == 0 &&
                  KERNEL_LIMIT < MMIX_PHYSICAL_ALIAS_BIT,
                "kernel text must admit a negative trap alias");
+_Static_assert(KERNEL_LINK == (MMIX_PHYSICAL_ALIAS_BIT | KERNEL_LOAD),
+               "kernel link address must be the negative alias of KERNEL_LOAD");
 
 #define MMIX_ASSERT_TRAP_GLOBAL(reg)                                         \
   _Static_assert(                                                            \

@@ -13,6 +13,14 @@ extern char kernel_low_vectors_end[];
 extern char kernel_root_tables_start[];
 extern char kernel_root_tables_end[];
 
+// Linked image symbols use the negative direct alias; ownership planning
+// operates on positive physical addresses.
+static uint64
+image_phys(uint64 address)
+{
+  return address & ~MMIX_PHYSICAL_ALIAS_BIT;
+}
+
 enum reservation_kind {
   RESERVATION_LOW_VECTORS,
   RESERVATION_ROOT_TABLES,
@@ -349,11 +357,11 @@ load_inputs(struct physmem_inputs *inputs)
 
   *inputs = (struct physmem_inputs){
     .cpu_count = platform_cpu_count(),
-    .image_start = (uint64)kernel_image_start,
-    .image_permanent_limit = (uint64)kernel_boot_stacks_start,
-    .image_limit = (uint64)kernel_end,
-    .boot_stacks_start = (uint64)kernel_boot_stacks_start,
-    .boot_stacks_limit = (uint64)kernel_boot_stacks_end,
+    .image_start = image_phys((uint64)kernel_image_start),
+    .image_permanent_limit = image_phys((uint64)kernel_boot_stacks_start),
+    .image_limit = image_phys((uint64)kernel_end),
+    .boot_stacks_start = image_phys((uint64)kernel_boot_stacks_start),
+    .boot_stacks_limit = image_phys((uint64)kernel_boot_stacks_end),
     .vector_start = (uint64)kernel_low_vectors_start,
     .vector_limit = (uint64)kernel_low_vectors_end,
     .root_start = (uint64)kernel_root_tables_start,

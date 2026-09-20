@@ -182,8 +182,6 @@ mmix_kernel_trap_entry:
         OR r232,r254,0
         GET r4,rJ
         GETA r0,mmix_kernel_trap
-        SLU r0,r0,1
-        SRU r0,r0,1
         PUSHGO r31,r0,0
         PUT rJ,r4
 

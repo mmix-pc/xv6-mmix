@@ -33,6 +33,10 @@
 #define MMIX_PAGE_SIZE 0x0000000000002000
 #define MMIX_PAGE_SHIFT 13
 
+// Privileged direct aliases set bit 63. The production kernel is linked at
+// KERNEL_LINK while its physical load address remains KERNEL_LOAD.
+#define MMIX_PHYSICAL_ALIAS_BIT 0x8000000000000000
+
 // The alignment must be a power of two.
 #define ROUNDUP(value, alignment)                                             \
   (((value) + (alignment) - 1) & ~((alignment) - 1))
@@ -52,7 +56,8 @@
 #define KERNEL_ROOT_LIMIT (KERNEL_ROOT_BASE + KERNEL_ROOT_SIZE)
 
 #define KERNEL_LOAD 0x0000000000100000
-#define KERNEL_ENTRY KERNEL_LOAD
+#define KERNEL_LINK (MMIX_PHYSICAL_ALIAS_BIT | KERNEL_LOAD)
+#define KERNEL_ENTRY KERNEL_LINK
 // Image ceiling matches the linker limit and the minimum 128-MiB RAM size.
 #define KERNEL_LIMIT 0x0000000008000000
 
@@ -182,8 +187,13 @@ _Static_assert(KERNEL_ROOT_SIZE == 0x6000,
 _Static_assert(KERNEL_ROOT_LIMIT <= KERNEL_LOAD,
                "kernel root tables must remain below the kernel image");
 
-_Static_assert((KERNEL_LOAD & (MMIX_PAGE_SIZE - 1)) == 0,
-               "kernel load address must be page-aligned");
+_Static_assert((KERNEL_LOAD & (MMIX_PAGE_SIZE - 1)) == 0 &&
+                 (KERNEL_LINK & (MMIX_PAGE_SIZE - 1)) == 0,
+               "kernel load and link addresses must be page-aligned");
+_Static_assert(KERNEL_LINK == (MMIX_PHYSICAL_ALIAS_BIT | KERNEL_LOAD),
+               "kernel link address must be the negative alias of KERNEL_LOAD");
+_Static_assert(KERNEL_ENTRY == KERNEL_LINK,
+               "kernel entry must be the linked image entry");
 _Static_assert(MMIX_PAGE_SIZE == (1 << MMIX_PAGE_SHIFT),
                "MMIX page size and shift must agree");
 _Static_assert(MMIX_MAX_CPUS <= 256,

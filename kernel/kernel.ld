@@ -4,10 +4,10 @@ ENTRY(_entry)
 
 SECTIONS
 {
-  . = 0x00100000;
+  . = 0x8000000000100000;
   kernel_image_start = .;
 
-  .text : ALIGN(0x2000) {
+  .text : AT(0x00100000) ALIGN(0x2000) {
     KEEP(kernel/entry.o(.text))
     . = ALIGN(16);
     KEEP(kernel/kernelvec.o(.text))
@@ -45,10 +45,10 @@ SECTIONS
   kernel_root_tables_start = 0x00002000;
   kernel_root_tables_end = 0x00008000;
 
-  ASSERT(_entry == 0x00100000,
+  ASSERT(_entry == 0x8000000000100000,
          "kernel entry does not match KERNEL_ENTRY")
-  ASSERT(kernel_image_start == 0x00100000,
-         "kernel image start does not match KERNEL_LOAD")
+  ASSERT(kernel_image_start == 0x8000000000100000,
+         "kernel image start does not match KERNEL_LINK")
   ASSERT(kernel_low_vectors_start == 0 &&
              kernel_low_vectors_end - kernel_low_vectors_start == 0x2000,
          "MMIX low vectors must reserve the first physical page")
@@ -60,22 +60,22 @@ SECTIONS
          "kernel root table reservation has the wrong size")
   ASSERT(kernel_root_tables_end <= 0x00100000,
          "kernel root tables overlap the kernel image")
-  ASSERT(kernel_text_end > 0x00100000,
+  ASSERT(kernel_text_end > 0x8000000000100000,
          "kernel text is empty")
   ASSERT((mmix_kernel_trap_entry & 0xf) == 0 &&
-             mmix_kernel_trap_entry >= 0x00100000 &&
+             mmix_kernel_trap_entry >= 0x8000000000100000 &&
              mmix_kernel_trap_entry < kernel_text_end,
          "MMIX kernel trap entry is misplaced")
   ASSERT((mmix_user_trap_entry & 0xf) == 0 &&
-             mmix_user_trap_entry >= 0x00100000 &&
+             mmix_user_trap_entry >= 0x8000000000100000 &&
              mmix_user_trap_entry < kernel_text_end &&
              (mmix_user_resume & 0xf) == 0 &&
-             mmix_user_resume >= 0x00100000 &&
+             mmix_user_resume >= 0x8000000000100000 &&
              mmix_user_resume < kernel_text_end,
          "MMIX user transition code is misplaced")
-  ASSERT((0x00100000 & 0xf) == 0 &&
-             kernel_text_end < 0x8000000000000000,
-         "kernel text cannot provide a negative MMIX trap alias")
+  ASSERT((0x8000000000100000 & 0xf) == 0 &&
+             kernel_text_end < 0x8000000008000000,
+         "kernel text cannot exceed the physical alias limit")
   ASSERT((kernel_text_end & 0x1fff) == 0,
          "kernel text end is not page-aligned")
   ASSERT(kernel_text_end <= kernel_rodata_end,
@@ -96,7 +96,7 @@ SECTIONS
   ASSERT(kernel_boot_stacks_end - kernel_boot_stacks_start == 0x20000 &&
              (kernel_boot_stacks_start & 0x1fff) == 0 &&
              kernel_boot_stacks_end == kernel_end &&
-             kernel_end <= 0x08000000,
+             kernel_end <= 0x8000000008000000,
          "MMIX bootstrap stack reservation is invalid")
   ASSERT(kernel_boot_stacks_start + 1024 <
              kernel_boot_stacks_start + 0x2000,
