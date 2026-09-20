@@ -971,8 +971,8 @@ add_cut(uint64 *cuts, uint32 *count, uint64 value)
 static uint64
 kernel_page_permissions(const struct kernel_mapping_layout *layout, uint64 va)
 {
-  uint64 text_end = (uint64)kernel_text_end;
-  uint64 rodata_end = (uint64)kernel_rodata_end;
+  uint64 text_end = mmix_alias_phys((uint64)kernel_text_end);
+  uint64 rodata_end = mmix_alias_phys((uint64)kernel_rodata_end);
 
   if (va < KERNEL_ROOT_LIMIT || va >= layout->ram_limit ||
       (va >= layout->framebuffer_start &&
@@ -994,16 +994,17 @@ build_kernel_mapping_layout(struct kernel_mapping_layout *layout)
   uint32 cut_count = 0;
   uint32 fdt_count = 0;
   uint32 framebuffer_count = 0;
-  uint64 text_end = (uint64)kernel_text_end;
-  uint64 rodata_end = (uint64)kernel_rodata_end;
+  uint64 text_end = mmix_alias_phys((uint64)kernel_text_end);
+  uint64 rodata_end = mmix_alias_phys((uint64)kernel_rodata_end);
+  uint64 image_end = mmix_alias_phys((uint64)kernel_end);
 
   if (layout == 0 || platform_ram(&ram) != PLATFORM_OK ||
       ram.physical_base != 0 || ram.size < PLATFORM_RAM_MIN_SIZE ||
       ram.size > KERNEL_IDENTITY_LIMIT || (ram.size & (PGSIZE - 1)) != 0 ||
       KERNEL_ROOT_LIMIT > KERNEL_LOAD || text_end <= KERNEL_LOAD ||
       (text_end & (PGSIZE - 1)) != 0 || rodata_end < text_end ||
-      (rodata_end & (PGSIZE - 1)) != 0 || rodata_end > (uint64)kernel_end ||
-      (uint64)kernel_end > ram.size)
+      (rodata_end & (PGSIZE - 1)) != 0 || rodata_end > image_end ||
+      image_end > ram.size)
     return -1;
   *layout = (struct kernel_mapping_layout){.ram_limit = ram.size};
   for (uint32 index = 0; index < platform_reservation_count(); index++) {
@@ -1043,10 +1044,10 @@ build_kernel_mapping_layout(struct kernel_mapping_layout *layout)
                      layout->fdt_limit - layout->fdt_start,
                      layout->framebuffer_start,
                      layout->framebuffer_limit - layout->framebuffer_start) ||
-      ranges_overlap(KERNEL_LOAD, (uint64)kernel_end - KERNEL_LOAD,
+      ranges_overlap(KERNEL_LOAD, image_end - KERNEL_LOAD,
                      layout->fdt_start,
                      layout->fdt_limit - layout->fdt_start) ||
-      ranges_overlap(KERNEL_LOAD, (uint64)kernel_end - KERNEL_LOAD,
+      ranges_overlap(KERNEL_LOAD, image_end - KERNEL_LOAD,
                      layout->framebuffer_start,
                      layout->framebuffer_limit - layout->framebuffer_start))
     return -1;
@@ -1134,6 +1135,25 @@ require_identity(pagetable_t pagetable, uint64 va, uint64 permissions)
              pa == va
            ? 0
            : -1;
+}
+
+static int require_unmapped(pagetable_t pagetable, uint64 va);
+
+// Linked kernel symbols are negative direct aliases. They bypass rV
+// translation, but their physical targets must remain identity-mapped with
+// the required permissions while the alias itself stays outside the table.
+static int
+require_linked_alias(pagetable_t pagetable, uint64 va, uint64 permissions)
+{
+  uint64 pa;
+
+  if ((va & MMIX_PHYSICAL_ALIAS_BIT) == 0 ||
+      require_unmapped(pagetable, va) < 0 ||
+      mmix_pagetable_translate(pagetable, mmix_alias_phys(va), permissions,
+                               &pa) < 0 ||
+      pa != mmix_alias_phys(va))
+    return -1;
+  return 0;
 }
 
 static int
@@ -1295,20 +1315,23 @@ kernel_pagetable_audit(pagetable_t pagetable,
       !platform_cpu_initial_stack_contains(cpuid(), rs) ||
       require_identity(pagetable, ro, PTE_R | PTE_W) < 0 ||
       require_identity(pagetable, rs, PTE_R | PTE_W) < 0 ||
-      require_identity(pagetable, (uint64)kvminit, PTE_R | PTE_X) < 0 ||
-      require_identity(pagetable, (uint64)kvminithart, PTE_R | PTE_X) < 0 ||
-      require_identity(pagetable, (uint64)&child_count, PTE_R | PTE_W) < 0 ||
-      require_identity(pagetable, (uint64)&mmix_boot_handoffs[0],
-                       PTE_R | PTE_W) < 0 ||
-      require_identity(pagetable,
-                       (uint64)&mmix_boot_handoffs[MMIX_MAX_CPUS - 1],
-                       PTE_R | PTE_W) < 0 ||
-      require_identity(pagetable, (uint64)&mmix_startup, PTE_R | PTE_W) < 0 ||
-      require_identity(
+      require_linked_alias(pagetable, (uint64)kvminit, PTE_R | PTE_X) < 0 ||
+      require_linked_alias(pagetable, (uint64)kvminithart, PTE_R | PTE_X) <
+        0 ||
+      require_linked_alias(pagetable, (uint64)&child_count, PTE_R | PTE_W) <
+        0 ||
+      require_linked_alias(pagetable, (uint64)&mmix_boot_handoffs[0],
+                           PTE_R | PTE_W) < 0 ||
+      require_linked_alias(pagetable,
+                           (uint64)&mmix_boot_handoffs[MMIX_MAX_CPUS - 1],
+                           PTE_R | PTE_W) < 0 ||
+      require_linked_alias(pagetable, (uint64)&mmix_startup, PTE_R | PTE_W) <
+        0 ||
+      require_linked_alias(
         pagetable, (uint64)&mmix_startup.cpu_stage[MMIX_MAX_CPUS - 1],
         PTE_R | PTE_W) < 0 ||
-      require_identity(pagetable, (uint64)&kernel_pagetable, PTE_R | PTE_W) <
-        0)
+      require_linked_alias(pagetable, (uint64)&kernel_pagetable,
+                           PTE_R | PTE_W) < 0)
     return -1;
 
   for (uint32 index = 0; index < layout->range_count; index++)

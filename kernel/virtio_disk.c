@@ -254,7 +254,7 @@ virtio_dma_range_valid(uint64 address, uint64 length)
 static uint64
 virtio_dma_page_address(void *page)
 {
-  uint64 address = (uint64)page;
+  uint64 address = mmix_alias_phys((uint64)page);
 
   if (!kalloc_page_is_dma(page) || (address & (PGSIZE - 1)) != 0 ||
       !virtio_dma_range_valid(address, PGSIZE))
@@ -265,14 +265,14 @@ virtio_dma_page_address(void *page)
 static uint64
 virtio_dma_static_address(void *storage, uint length, uint alignment)
 {
-  uint64 address = (uint64)storage;
+  uint64 address = mmix_alias_phys((uint64)storage);
   uint64 limit = address + length;
 
   if (length == 0 || alignment == 0 ||
       (alignment & (alignment - 1)) != 0 ||
       (address & (alignment - 1)) != 0 || limit < address ||
-      address < (uint64)kernel_rodata_end ||
-      limit > (uint64)kernel_boot_stacks_start ||
+      address < mmix_alias_phys((uint64)kernel_rodata_end) ||
+      limit > mmix_alias_phys((uint64)kernel_boot_stacks_start) ||
       !virtio_dma_range_valid(address, length))
     virtio_fail("virtio dma static");
   return address;
