@@ -524,8 +524,9 @@ virtio_chain_matches(uint head)
 {
   struct virtio_request_info *info = &disk.info[head];
   struct virtio_request_wire *wire = &disk.wire[head];
-  uint64 wire_address = (uint64)wire;
-  uint64 data_address = (uint64)disk.data[head];
+  uint64 wire_address =
+    virtio_dma_static_address(wire, sizeof(*wire), VIRTIO_DMA_SYNC_BYTES);
+  uint64 data_address = virtio_dma_page_address(disk.data[head]);
   uint16 data_flags = VRING_DESC_F_NEXT;
 
   if (!info->active || info->b == 0 || info->desc[0] != head ||
