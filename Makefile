@@ -51,15 +51,10 @@ CFLAGS = -Wall -Werror -Wno-unknown-attributes -O2 -fno-omit-frame-pointer
 CFLAGS += --target=mmix
 CFLAGS += -std=gnu99
 CFLAGS += -MD
-CFLAGS += -ffreestanding
+CFLAGS += -ffreestanding -fno-builtin
 CFLAGS += -fno-common -nostdlib
 CFLAGS += -fno-stack-protector -fno-pie
-CFLAGS += -fno-builtin-strncpy -fno-builtin-strncmp -fno-builtin-strlen -fno-builtin-memset
-CFLAGS += -fno-builtin-memmove -fno-builtin-memcmp -fno-builtin-log -fno-builtin-bzero
-CFLAGS += -fno-builtin-strchr -fno-builtin-exit -fno-builtin-malloc -fno-builtin-putc
-CFLAGS += -fno-builtin-free
-CFLAGS += -fno-builtin-memcpy -Wno-main
-CFLAGS += -fno-builtin-printf -fno-builtin-fprintf -fno-builtin-vprintf
+CFLAGS += -Wno-main
 CFLAGS += -I.
 
 ASFLAGS = --target=mmix
