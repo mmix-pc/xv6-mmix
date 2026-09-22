@@ -47,17 +47,23 @@ QEMU = qemu-system-mmix
 HOSTCC ?= cc
 HOSTCFLAGS ?= -Wall -Werror -O2
 
-CFLAGS = -Wall -Werror -Wno-unknown-attributes -O2 -fno-omit-frame-pointer
-CFLAGS += --target=mmix
+# Target and language
+CFLAGS = --target=mmix
 CFLAGS += -std=gnu99
+# Freestanding environment: no libc, no compiler builtins, no common symbols
+CFLAGS += -ffreestanding -fno-builtin -fno-common -nostdlib
+# Code generation: keep the fixed C-ABI frame pointer, no stack protector,
+# and position-dependent code for the fixed negative-alias link address
+CFLAGS += -O2 -fno-omit-frame-pointer -fno-stack-protector -fno-pie
+# Diagnostics
+CFLAGS += -Wall -Werror -Wno-unknown-attributes -Wno-main
+# Dependency tracking and headers
 CFLAGS += -MD
-CFLAGS += -ffreestanding -fno-builtin
-CFLAGS += -fno-common -nostdlib
-CFLAGS += -fno-stack-protector -fno-pie
-CFLAGS += -Wno-main
 CFLAGS += -I.
 
 ASFLAGS = --target=mmix
+ASFLAGS += -MD
+ASFLAGS += -I.
 LDFLAGS = -m elf64mmix
 # exec requires PT_LOAD offsets and alignment to match 8-KiB MMIX pages.
 USER_LDFLAGS = $(LDFLAGS) -z max-page-size=8192
