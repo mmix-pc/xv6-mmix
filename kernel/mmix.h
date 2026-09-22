@@ -214,6 +214,7 @@
 
 #if !defined(__ASSEMBLER__)
 
+#include "atomic.h"
 #include "types.h"
 
 // C types and encoding helpers.

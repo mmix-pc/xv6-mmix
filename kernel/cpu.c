@@ -16,7 +16,7 @@ static uint64 boot_stack_departures;
 uint64
 cpu_boot_stack_departures(void)
 {
-  return __atomic_load_n(&boot_stack_departures, __ATOMIC_ACQUIRE);
+  return atomic_load_acquire(&boot_stack_departures);
 }
 
 static void
@@ -32,7 +32,7 @@ cpu_retire_boot_context(void)
     panic("CPU initial stack");
   // This separate acknowledgment proves the software stack was abandoned by
   // irreversible entry. Copied entry addresses do not keep its pages live.
-  __atomic_fetch_or(&boot_stack_departures, 1ULL << id, __ATOMIC_RELEASE);
+  atomic_fetch_or_release(&boot_stack_departures, 1ULL << id);
 }
 
 int
@@ -44,13 +44,12 @@ cpu_reclaim_initial_stack(uint32 id)
 
   if (id != cpuid() || id >= platform_cpu_count())
     return PHYSMEM_BAD_ARGUMENT;
-  if (__atomic_load_n(&mmix_startup.context_transfers[id],
-                      __ATOMIC_ACQUIRE) != 0)
+  if (atomic_load_acquire(&mmix_startup.context_transfers[id]) != 0)
     return PHYSMEM_ALREADY_RELEASED;
   if (!initial_stack_detached[id] ||
-      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+      atomic_load_acquire(&mmix_startup.state) !=
         MMIX_STARTUP_GLOBAL_READY ||
-      (__atomic_load_n(&mmix_startup.online, __ATOMIC_ACQUIRE) &
+      (atomic_load_acquire(&mmix_startup.online) &
        (1ULL << id)) == 0 ||
       mmix_rv_read() != MMIX_KERNEL_RV || intr_get() || c->noff != 0 ||
       c->proc != 0 || c->trap.active != 0 ||
@@ -63,7 +62,7 @@ cpu_reclaim_initial_stack(uint32 id)
   kalloc_publish_release(&released);
   // The new rO/rS and software stack were checked after the final UNSAVE.
   // Publish completion only after every newly eligible page is allocatable.
-  __atomic_store_n(&mmix_startup.context_transfers[id], 1, __ATOMIC_RELEASE);
+  atomic_store_release(&mmix_startup.context_transfers[id], 1);
   return PHYSMEM_OK;
 }
 

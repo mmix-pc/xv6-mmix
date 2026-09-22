@@ -1,4 +1,5 @@
 #include "types.h"
+#include "atomic.h"
 #include "fdt.h"
 #include "memlayout.h"
 #include "platform.h"
@@ -1453,7 +1454,7 @@ platform_decode_devices(const struct fdt *fdt, struct platform *platform)
 static int
 platform_is_published(void)
 {
-  return __atomic_load_n(&platform_discovery_state, __ATOMIC_ACQUIRE) ==
+  return atomic_load_acquire(&platform_discovery_state) ==
          PLATFORM_PUBLISHED;
 }
 
@@ -1464,9 +1465,8 @@ platform_discover(const struct fdt *fdt, uint64 fdt_address)
   uint64 expected = PLATFORM_UNDISCOVERED;
   int status;
 
-  if (!__atomic_compare_exchange_n(
-        &platform_discovery_state, &expected, PLATFORM_DISCOVERING, 0,
-        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+  if (!atomic_cas_acq_rel(
+        &platform_discovery_state, &expected, PLATFORM_DISCOVERING))
     return PLATFORM_ALREADY_DISCOVERED;
   if (fdt == 0 || fdt_address == 0) {
     status = PLATFORM_BAD_ARGUMENT;
@@ -1481,13 +1481,11 @@ platform_discover(const struct fdt *fdt, uint64 fdt_address)
 
   platform_description = candidate;
   platform_fdt_address = fdt_address;
-  __atomic_store_n(&platform_discovery_state, PLATFORM_PUBLISHED,
-                   __ATOMIC_RELEASE);
+  atomic_store_release(&platform_discovery_state, PLATFORM_PUBLISHED);
   return PLATFORM_OK;
 
 failed:
-  __atomic_store_n(&platform_discovery_state, PLATFORM_DISCOVERY_FAILED,
-                   __ATOMIC_RELEASE);
+  atomic_store_release(&platform_discovery_state, PLATFORM_DISCOVERY_FAILED);
   return status;
 }
 

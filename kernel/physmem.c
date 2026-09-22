@@ -1,4 +1,5 @@
 #include "types.h"
+#include "atomic.h"
 #include "param.h"
 #include "memlayout.h"
 #include "platform.h"
@@ -80,14 +81,14 @@ ranges_overlap(uint64 left_start, uint64 left_limit, uint64 right_start,
 static void
 lock_plan(void)
 {
-  while (__atomic_exchange_n(&plan_lock, 1, __ATOMIC_ACQUIRE) != 0)
+  while (atomic_exchange_acquire(&plan_lock, 1) != 0)
     asm volatile("SWYM 0,0,0" ::: "memory");
 }
 
 static void
 unlock_plan(void)
 {
-  __atomic_store_n(&plan_lock, 0, __ATOMIC_RELEASE);
+  atomic_store_release(&plan_lock, 0);
 }
 
 static int

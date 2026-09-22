@@ -34,7 +34,7 @@ timer_configure(void)
   uint32 cpu_count;
   uint32 interrupts[MMIX_MAX_CPUS];
 
-  if (__atomic_load_n(&timer_configured, __ATOMIC_ACQUIRE) != 0)
+  if (atomic_load_acquire(&timer_configured) != 0)
     return 1;
   if (cpuid() != BOOT_CPU_ID ||
       platform_timer_config(&config) != PLATFORM_OK)
@@ -60,14 +60,14 @@ timer_configure(void)
   timer_tick_interval = config.clock_frequency / MMIX_TIMER_TICKS_PER_SECOND;
   for (uint32 id = 0; id < cpu_count; id++)
     timer_interrupts[id] = interrupts[id];
-  __atomic_store_n(&timer_configured, 1, __ATOMIC_RELEASE);
+  atomic_store_release(&timer_configured, 1);
   return 1;
 }
 
 static int
 timer_config_valid(void)
 {
-  return __atomic_load_n(&timer_configured, __ATOMIC_ACQUIRE) != 0;
+  return atomic_load_acquire(&timer_configured) != 0;
 }
 
 static int

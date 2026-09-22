@@ -23,8 +23,7 @@ static int fdt_readers_done;
 static void
 startup_set_stage(uint64 cpu_id, enum mmix_cpu_startup_stage stage)
 {
-  __atomic_store_n(&mmix_startup.cpu_stage[cpu_id], (uint64)stage,
-                   __ATOMIC_RELEASE);
+  atomic_store_release(&mmix_startup.cpu_stage[cpu_id], (uint64)stage);
 }
 
 static void
@@ -32,11 +31,8 @@ startup_fail(enum mmix_startup_failure failure)
 {
   uint64 expected = MMIX_STARTUP_FAILURE_NONE;
 
-  __atomic_compare_exchange_n(&mmix_startup.failure, &expected,
-                              (uint64)failure, 0, __ATOMIC_RELAXED,
-                              __ATOMIC_RELAXED);
-  __atomic_store_n(&mmix_startup.state, MMIX_STARTUP_FAILED,
-                   __ATOMIC_RELEASE);
+  atomic_cas_relaxed(&mmix_startup.failure, &expected, (uint64)failure);
+  atomic_store_release(&mmix_startup.state, MMIX_STARTUP_FAILED);
 }
 
 static void startup_terminal(void) __attribute__((noreturn));
@@ -60,8 +56,7 @@ startup_publish_arrival(uint64 cpu_id)
   uint64 old;
 
   startup_set_stage(cpu_id, MMIX_CPU_STAGE_ARRIVED);
-  old = __atomic_fetch_or(&mmix_startup.arrived, 1ULL << cpu_id,
-                          __ATOMIC_RELEASE);
+  old = atomic_fetch_or_release(&mmix_startup.arrived, 1ULL << cpu_id);
   if (old & (1ULL << cpu_id)) {
     startup_fail(MMIX_STARTUP_FAILURE_DUPLICATE_ARRIVAL);
     return -1;
@@ -75,8 +70,7 @@ startup_publish_online(uint64 cpu_id)
   uint64 old;
 
   startup_set_stage(cpu_id, MMIX_CPU_STAGE_ONLINE);
-  old = __atomic_fetch_or(&mmix_startup.online, 1ULL << cpu_id,
-                          __ATOMIC_RELEASE);
+  old = atomic_fetch_or_release(&mmix_startup.online, 1ULL << cpu_id);
   if (old & (1ULL << cpu_id)) {
     startup_fail(MMIX_STARTUP_FAILURE_DUPLICATE_ONLINE);
     return -1;
@@ -90,8 +84,7 @@ startup_publish_interrupt_ready(uint64 cpu_id)
   uint64 old;
 
   startup_set_stage(cpu_id, MMIX_CPU_STAGE_INTERRUPT_READY);
-  old = __atomic_fetch_or(&mmix_startup.interrupt_ready, 1ULL << cpu_id,
-                          __ATOMIC_RELEASE);
+  old = atomic_fetch_or_release(&mmix_startup.interrupt_ready, 1ULL << cpu_id);
   if (old & (1ULL << cpu_id)) {
     startup_fail(MMIX_STARTUP_FAILURE_DUPLICATE_INTERRUPT_READY);
     return -1;
@@ -105,15 +98,11 @@ startup_begin_collection(void)
   uint64 expected = MMIX_STARTUP_RESET;
   uint64 generation = 0;
 
-  if (!__atomic_compare_exchange_n(&mmix_startup.generation, &generation,
-                                   MMIX_STARTUP_GENERATION, 0,
-                                   __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+  if (!atomic_cas_acq_rel(&mmix_startup.generation, &generation, MMIX_STARTUP_GENERATION)) {
     startup_fail(MMIX_STARTUP_FAILURE_GENERATION);
     return -1;
   }
-  if (!__atomic_compare_exchange_n(&mmix_startup.state, &expected,
-                                   MMIX_STARTUP_COLLECTING, 0,
-                                   __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+  if (!atomic_cas_acq_rel(&mmix_startup.state, &expected, MMIX_STARTUP_COLLECTING)) {
     startup_fail(MMIX_STARTUP_FAILURE_PREMATURE_PUBLICATION);
     return -1;
   }
@@ -124,8 +113,8 @@ static int
 startup_wait_for_arrivals(uint64 expected_mask)
 {
   for (;;) {
-    uint64 state = __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE);
-    uint64 arrived = __atomic_load_n(&mmix_startup.arrived, __ATOMIC_ACQUIRE);
+    uint64 state = atomic_load_acquire(&mmix_startup.state);
+    uint64 arrived = atomic_load_acquire(&mmix_startup.arrived);
 
     if (state == MMIX_STARTUP_FAILED)
       return -1;
@@ -147,8 +136,7 @@ startup_validate_handoffs(uint64 fdt_address)
   for (uint64 cpu_id = 0; cpu_id < cpu_count; cpu_id++) {
     const struct mmix_boot_handoff *handoff = &mmix_boot_handoffs[cpu_id];
     struct platform_physical_range stack;
-    uint64 stage = __atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
-                                   __ATOMIC_ACQUIRE);
+    uint64 stage = atomic_load_acquire(&mmix_startup.cpu_stage[cpu_id]);
 
     if (platform_cpu_initial_stack(cpu_id, &stack) != PLATFORM_OK) {
       startup_fail(MMIX_STARTUP_FAILURE_REGISTER_STACK);
@@ -198,23 +186,17 @@ startup_claim_global_initialization(void)
 {
   uint64 expected = 0;
 
-  if (!__atomic_compare_exchange_n(&mmix_startup.global_owner, &expected,
-                                   BOOT_CPU_ID + 1, 0, __ATOMIC_ACQ_REL,
-                                   __ATOMIC_ACQUIRE)) {
+  if (!atomic_cas_acq_rel(&mmix_startup.global_owner, &expected, BOOT_CPU_ID + 1)) {
     startup_fail(MMIX_STARTUP_FAILURE_DUPLICATE_INITIALIZER);
     return -1;
   }
   expected = 0;
-  if (!__atomic_compare_exchange_n(&mmix_startup.global_initializer_count,
-                                   &expected, 1, 0, __ATOMIC_ACQ_REL,
-                                   __ATOMIC_ACQUIRE)) {
+  if (!atomic_cas_acq_rel(&mmix_startup.global_initializer_count, &expected, 1)) {
     startup_fail(MMIX_STARTUP_FAILURE_DUPLICATE_INITIALIZER);
     return -1;
   }
   expected = MMIX_STARTUP_COLLECTING;
-  if (!__atomic_compare_exchange_n(&mmix_startup.state, &expected,
-                                   MMIX_STARTUP_INITIALIZING, 0,
-                                   __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+  if (!atomic_cas_acq_rel(&mmix_startup.state, &expected, MMIX_STARTUP_INITIALIZING)) {
     startup_fail(MMIX_STARTUP_FAILURE_PREMATURE_PUBLICATION);
     return -1;
   }
@@ -230,22 +212,20 @@ secondary_wait_for_global(uint64 cpu_id, uint64 fdt_address)
 {
   startup_set_stage(cpu_id, MMIX_CPU_STAGE_WAIT_GLOBAL);
   for (;;) {
-    uint64 state = __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE);
+    uint64 state = atomic_load_acquire(&mmix_startup.state);
 
     if (state == MMIX_STARTUP_FAILED)
       startup_terminal();
     if (state == MMIX_STARTUP_GLOBAL_READY) {
-      if (__atomic_load_n(&mmix_startup.generation, __ATOMIC_RELAXED) !=
+      if (atomic_load_relaxed(&mmix_startup.generation) !=
             MMIX_STARTUP_GENERATION ||
-          __atomic_load_n(&mmix_startup.failure, __ATOMIC_RELAXED) !=
+          atomic_load_relaxed(&mmix_startup.failure) !=
             MMIX_STARTUP_FAILURE_NONE ||
-          __atomic_load_n(&mmix_startup.global_owner, __ATOMIC_RELAXED) !=
+          atomic_load_relaxed(&mmix_startup.global_owner) !=
             BOOT_CPU_ID + 1 ||
-          __atomic_load_n(&mmix_startup.global_initializer_count,
-                          __ATOMIC_RELAXED) != 1 ||
-          __atomic_load_n(&mmix_startup.platform_publications,
-                          __ATOMIC_RELAXED) != 1 ||
-          __atomic_load_n(&mmix_startup.ready_cookie, __ATOMIC_RELAXED) !=
+          atomic_load_relaxed(&mmix_startup.global_initializer_count) != 1 ||
+          atomic_load_relaxed(&mmix_startup.platform_publications) != 1 ||
+          atomic_load_relaxed(&mmix_startup.ready_cookie) !=
             MMIX_STARTUP_READY_COOKIE ||
           cpu_id >= platform_cpu_count() ||
           fdt_address != platform_fdt_physical_address()) {
@@ -273,21 +253,19 @@ boot_wait_for_online(void)
   uint64 cpu_count = platform_cpu_count();
   uint64 expected_mask = startup_expected_mask(cpu_count);
 
-  if (__atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+  if (atomic_load_acquire(&mmix_startup.state) !=
         MMIX_STARTUP_GLOBAL_READY ||
-      __atomic_load_n(&mmix_startup.generation, __ATOMIC_RELAXED) !=
+      atomic_load_relaxed(&mmix_startup.generation) !=
         MMIX_STARTUP_GENERATION ||
-      __atomic_load_n(&mmix_startup.arrived, __ATOMIC_RELAXED) !=
+      atomic_load_relaxed(&mmix_startup.arrived) !=
         expected_mask ||
-      __atomic_load_n(&mmix_startup.global_owner, __ATOMIC_RELAXED) !=
+      atomic_load_relaxed(&mmix_startup.global_owner) !=
         BOOT_CPU_ID + 1 ||
-      __atomic_load_n(&mmix_startup.global_initializer_count,
-                      __ATOMIC_RELAXED) != 1 ||
-      __atomic_load_n(&mmix_startup.platform_publications,
-                      __ATOMIC_RELAXED) != 1 ||
-      __atomic_load_n(&mmix_startup.failure, __ATOMIC_RELAXED) !=
+      atomic_load_relaxed(&mmix_startup.global_initializer_count) != 1 ||
+      atomic_load_relaxed(&mmix_startup.platform_publications) != 1 ||
+      atomic_load_relaxed(&mmix_startup.failure) !=
         MMIX_STARTUP_FAILURE_NONE ||
-      __atomic_load_n(&mmix_startup.ready_cookie, __ATOMIC_RELAXED) !=
+      atomic_load_relaxed(&mmix_startup.ready_cookie) !=
         MMIX_STARTUP_READY_COOKIE ||
       cpuid() != BOOT_CPU_ID) {
     startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
@@ -299,9 +277,9 @@ boot_wait_for_online(void)
     return -1;
 
   for (;;) {
-    uint64 online = __atomic_load_n(&mmix_startup.online, __ATOMIC_ACQUIRE);
+    uint64 online = atomic_load_acquire(&mmix_startup.online);
 
-    if (__atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) ==
+    if (atomic_load_acquire(&mmix_startup.state) ==
         MMIX_STARTUP_FAILED)
       return -1;
     if ((online & ~expected_mask) != 0) {
@@ -313,16 +291,14 @@ boot_wait_for_online(void)
       continue;
     }
     for (uint64 cpu_id = 1; cpu_id < cpu_count; cpu_id++) {
-      uint64 stage = __atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
-                                     __ATOMIC_ACQUIRE);
+      uint64 stage = atomic_load_acquire(&mmix_startup.cpu_stage[cpu_id]);
       if (stage == MMIX_CPU_STAGE_ONLINE)
         continue;
       startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
       return -1;
     }
     for (uint64 cpu_id = cpu_count; cpu_id < MMIX_MAX_CPUS; cpu_id++) {
-      if (__atomic_load_n(&mmix_startup.context_transfers[cpu_id],
-                          __ATOMIC_RELAXED) != 0) {
+      if (atomic_load_relaxed(&mmix_startup.context_transfers[cpu_id]) != 0) {
         startup_fail(MMIX_STARTUP_FAILURE_TOPOLOGY);
         return -1;
       }
@@ -345,7 +321,7 @@ boot_reclaim_fdt(void)
   // Reclaim first so no stale read-only FDT translation can survive reuse.
   if (cpuid() != BOOT_CPU_ID || !fdt_readers_done ||
       kernel_pagetable->rv != 0 ||
-      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+      atomic_load_acquire(&mmix_startup.state) !=
         MMIX_STARTUP_GLOBAL_READY)
     return PHYSMEM_NOT_READY;
   kalloc_get_stats(&stats);
@@ -367,9 +343,9 @@ boot_reclaim_stacks(void)
 
   if (cpuid() != BOOT_CPU_ID || mask == 0 || intr_get() ||
       c->noff != 0 || c->trap.active != 0 || c->proc != 0 ||
-      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+      atomic_load_acquire(&mmix_startup.state) !=
         MMIX_STARTUP_GLOBAL_READY ||
-      __atomic_load_n(&mmix_startup.online, __ATOMIC_ACQUIRE) != mask ||
+      atomic_load_acquire(&mmix_startup.online) != mask ||
       cpu_boot_stack_departures() != mask ||
       !kcontext_current_valid(&c->context,
                               MMIX_CONTEXT_SCHEDULER_SLOT(BOOT_CPU_ID)))
@@ -396,20 +372,19 @@ boot_publish_interrupt_ready(void)
   struct cpu *c = mycpu();
 
   if (cpu_id >= platform_cpu_count() || c != &cpus[cpu_id] ||
-      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+      atomic_load_acquire(&mmix_startup.state) !=
         MMIX_STARTUP_GLOBAL_READY ||
       timer_irq(&timer_irq_number) != MMIX_TIMER_OK ||
       !intr_get())
     goto fail;
   push_off();
-  stage = __atomic_load_n(&mmix_startup.cpu_stage[cpu_id], __ATOMIC_ACQUIRE);
-  entries = __atomic_load_n(&c->trap.interrupt_entries, __ATOMIC_ACQUIRE);
-  returns = __atomic_load_n(&c->trap.interrupt_returns, __ATOMIC_ACQUIRE);
+  stage = atomic_load_acquire(&mmix_startup.cpu_stage[cpu_id]);
+  entries = atomic_load_acquire(&c->trap.interrupt_entries);
+  returns = atomic_load_acquire(&c->trap.interrupt_returns);
   if (stage != MMIX_CPU_STAGE_ONLINE ||
-      (__atomic_load_n(&mmix_startup.online, __ATOMIC_ACQUIRE) &
+      (atomic_load_acquire(&mmix_startup.online) &
        (1ULL << cpu_id)) == 0 ||
-      __atomic_load_n(&mmix_startup.context_transfers[cpu_id],
-                      __ATOMIC_ACQUIRE) != 1 ||
+      atomic_load_acquire(&mmix_startup.context_transfers[cpu_id]) != 1 ||
       !kcontext_current_valid(&c->context,
                               MMIX_CONTEXT_SCHEDULER_SLOT(cpu_id)) ||
       intr_get() || (mmix_rk_read() & MMIX_KERNEL_INTERRUPT_MASK) != 0 ||
@@ -446,16 +421,16 @@ boot_wait_for_interrupt_ready(void)
   uint64 expected_mask = startup_expected_mask(cpu_count);
 
   if (cpuid() != BOOT_CPU_ID ||
-      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+      atomic_load_acquire(&mmix_startup.state) !=
         MMIX_STARTUP_GLOBAL_READY)
     goto fail;
 
   for (;;) {
     uint64 ready =
-      __atomic_load_n(&mmix_startup.interrupt_ready, __ATOMIC_ACQUIRE);
+      atomic_load_acquire(&mmix_startup.interrupt_ready);
     int all_idle = 1;
 
-    if (__atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) ==
+    if (atomic_load_acquire(&mmix_startup.state) ==
         MMIX_STARTUP_FAILED)
       return -1;
     if ((ready & ~expected_mask) != 0)
@@ -465,8 +440,7 @@ boot_wait_for_interrupt_ready(void)
       continue;
     }
     for (uint64 cpu_id = 1; cpu_id < cpu_count; cpu_id++) {
-      uint64 stage = __atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
-                                     __ATOMIC_ACQUIRE);
+      uint64 stage = atomic_load_acquire(&mmix_startup.cpu_stage[cpu_id]);
 
       if (stage == MMIX_CPU_STAGE_INTERRUPT_READY) {
         all_idle = 0;
@@ -496,25 +470,22 @@ boot_release_schedulers(void)
   uint64 expected_mask = startup_expected_mask(cpu_count);
 
   if (cpuid() != BOOT_CPU_ID || intr_get() || mycpu()->proc != 0 ||
-      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+      atomic_load_acquire(&mmix_startup.state) !=
         MMIX_STARTUP_GLOBAL_READY ||
-      __atomic_load_n(&mmix_startup.interrupt_ready, __ATOMIC_ACQUIRE) !=
+      atomic_load_acquire(&mmix_startup.interrupt_ready) !=
         expected_mask ||
-      __atomic_load_n(&mmix_startup.cpu_stage[BOOT_CPU_ID],
-                      __ATOMIC_ACQUIRE) != MMIX_CPU_STAGE_SERVICE)
+      atomic_load_acquire(&mmix_startup.cpu_stage[BOOT_CPU_ID]) != MMIX_CPU_STAGE_SERVICE)
     goto fail;
   for (uint64 cpu_id = 0; cpu_id < cpu_count; cpu_id++) {
     uint64 expected_stage = cpu_id == BOOT_CPU_ID ?
       MMIX_CPU_STAGE_SERVICE : MMIX_CPU_STAGE_SECONDARY_IDLE;
 
-    if (__atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
-                        __ATOMIC_ACQUIRE) != expected_stage ||
+    if (atomic_load_acquire(&mmix_startup.cpu_stage[cpu_id]) != expected_stage ||
         cpus[cpu_id].proc != 0 || cpus[cpu_id].scheduler_entries != 0 ||
         cpus[cpu_id].scheduler_dispatches != 0)
       goto fail;
   }
-  __atomic_store_n(&mmix_startup.state, MMIX_STARTUP_SCHEDULER_RELEASED,
-                   __ATOMIC_RELEASE);
+  atomic_store_release(&mmix_startup.state, MMIX_STARTUP_SCHEDULER_RELEASED);
   return 0;
 
 fail:
@@ -529,11 +500,10 @@ boot_wait_for_scheduler_release(void)
 
   if (cpu_id == BOOT_CPU_ID || cpu_id >= platform_cpu_count() ||
       !intr_get() ||
-      __atomic_load_n(&mmix_startup.cpu_stage[cpu_id],
-                      __ATOMIC_ACQUIRE) != MMIX_CPU_STAGE_SECONDARY_IDLE)
+      atomic_load_acquire(&mmix_startup.cpu_stage[cpu_id]) != MMIX_CPU_STAGE_SECONDARY_IDLE)
     goto fail;
   for (;;) {
-    uint64 state = __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE);
+    uint64 state = atomic_load_acquire(&mmix_startup.state);
 
     if (state == MMIX_STARTUP_SCHEDULER_RELEASED)
       return 0;
@@ -557,7 +527,7 @@ boot_publish_scheduler_ready(void)
   uint64 expected_stage = cpu_id == BOOT_CPU_ID ?
     MMIX_CPU_STAGE_SERVICE : MMIX_CPU_STAGE_SECONDARY_IDLE;
   if (cpu_id >= platform_cpu_count() || c != &cpus[cpu_id] ||
-      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+      atomic_load_acquire(&mmix_startup.state) !=
         MMIX_STARTUP_SCHEDULER_RELEASED ||
       c->proc != 0 || c->scheduler_entries != 1 ||
       c->scheduler_dispatches != 0 || c->noff != 0 || c->trap.active != 0 ||
@@ -565,10 +535,7 @@ boot_publish_scheduler_ready(void)
       !kcontext_current_valid(&c->context,
                               MMIX_CONTEXT_SCHEDULER_SLOT(cpu_id)))
     goto fail;
-  if (!__atomic_compare_exchange_n(&mmix_startup.cpu_stage[cpu_id],
-                                   &expected_stage,
-                                   MMIX_CPU_STAGE_SCHEDULER, 0,
-                                   __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
+  if (!atomic_cas_release_acquire(&mmix_startup.cpu_stage[cpu_id], &expected_stage, MMIX_CPU_STAGE_SCHEDULER))
     goto fail;
   printk("scheduler-ready: cpu=%d context=%p\n", (int)cpu_id,
          (void *)c->context.state);
@@ -585,29 +552,24 @@ startup_publish_platform(void)
   uint64 publications = 0;
 
   if (cpuid() != BOOT_CPU_ID ||
-      __atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) !=
+      atomic_load_acquire(&mmix_startup.state) !=
         MMIX_STARTUP_INITIALIZING ||
-      __atomic_load_n(&mmix_startup.generation, __ATOMIC_RELAXED) !=
+      atomic_load_relaxed(&mmix_startup.generation) !=
         MMIX_STARTUP_GENERATION ||
-      __atomic_load_n(&mmix_startup.global_owner, __ATOMIC_RELAXED) !=
+      atomic_load_relaxed(&mmix_startup.global_owner) !=
         BOOT_CPU_ID + 1 ||
-      __atomic_load_n(&mmix_startup.global_initializer_count,
-                      __ATOMIC_RELAXED) != 1 ||
-      __atomic_load_n(&mmix_startup.failure, __ATOMIC_RELAXED) !=
+      atomic_load_relaxed(&mmix_startup.global_initializer_count) != 1 ||
+      atomic_load_relaxed(&mmix_startup.failure) !=
         MMIX_STARTUP_FAILURE_NONE ||
-      __atomic_load_n(&mmix_startup.ready_cookie, __ATOMIC_RELAXED) != 0 ||
-      !__atomic_compare_exchange_n(&mmix_startup.platform_publications,
-                                   &publications, 1, 0, __ATOMIC_RELAXED,
-                                   __ATOMIC_RELAXED)) {
+      atomic_load_relaxed(&mmix_startup.ready_cookie) != 0 ||
+      !atomic_cas_relaxed(&mmix_startup.platform_publications, &publications, 1)) {
     startup_fail(MMIX_STARTUP_FAILURE_PREMATURE_PUBLICATION);
     return -1;
   }
 
-  __atomic_store_n(&mmix_startup.ready_cookie, MMIX_STARTUP_READY_COOKIE,
-                   __ATOMIC_RELAXED);
+  atomic_store_relaxed(&mmix_startup.ready_cookie, MMIX_STARTUP_READY_COOKIE);
   startup_set_stage(BOOT_CPU_ID, MMIX_CPU_STAGE_GLOBAL_ACQUIRED);
-  __atomic_store_n(&mmix_startup.state, MMIX_STARTUP_GLOBAL_READY,
-                   __ATOMIC_RELEASE);
+  atomic_store_release(&mmix_startup.state, MMIX_STARTUP_GLOBAL_READY);
   return 0;
 }
 
@@ -678,7 +640,7 @@ start(uint64 startup_cpu_id, uint64 fdt_address, uint64 entry_rl,
 failed:
   if (startup_cpu_id == BOOT_CPU_ID) {
     diagnostic_startup_failure(
-      __atomic_load_n(&mmix_startup.failure, __ATOMIC_RELAXED),
+      atomic_load_relaxed(&mmix_startup.failure),
       decode_status);
     panic("SMP startup");
   }

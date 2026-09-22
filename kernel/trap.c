@@ -209,20 +209,18 @@ trap_interrupt_service(uint64 rq, uint64 restore_rk, uint64 rxx,
   uint64 entries;
   uint64 returns;
 
-  entries = __atomic_load_n(&c->trap.interrupt_entries, __ATOMIC_RELAXED);
+  entries = atomic_load_relaxed(&c->trap.interrupt_entries);
   if (entries == ~0ULL)
     return "interrupt entry overflow";
-  __atomic_store_n(&c->trap.interrupt_entries, entries + 1,
-                   __ATOMIC_RELEASE);
+  atomic_store_release(&c->trap.interrupt_entries, entries + 1);
   error = trap_interrupt_dispatch(rq, restore_rk, rxx, serviced, claim,
                                   preempt);
   if (error != 0)
     return error;
-  returns = __atomic_load_n(&c->trap.interrupt_returns, __ATOMIC_RELAXED);
+  returns = atomic_load_relaxed(&c->trap.interrupt_returns);
   if (returns == ~0ULL || returns + 1 != entries + 1)
     return "interrupt return imbalance";
-  __atomic_store_n(&c->trap.interrupt_returns, returns + 1,
-                   __ATOMIC_RELEASE);
+  atomic_store_release(&c->trap.interrupt_returns, returns + 1);
   return 0;
 }
 

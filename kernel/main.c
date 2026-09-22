@@ -72,8 +72,8 @@ kernel_ready(void)
 void
 secondary_main(void)
 {
-  while (__atomic_load_n(&memory_ready, __ATOMIC_ACQUIRE) == 0) {
-    if (__atomic_load_n(&mmix_startup.state, __ATOMIC_ACQUIRE) ==
+  while (atomic_load_acquire(&memory_ready) == 0) {
+    if (atomic_load_acquire(&mmix_startup.state) ==
         MMIX_STARTUP_FAILED)
       panic("shared initialization");
     cpu_idle();
@@ -109,6 +109,6 @@ main(void)
   if (intc_publish_affinity() != MMIX_INTC_OK ||
       timer_validate() != MMIX_TIMER_OK || ipi_validate() != MMIX_IPI_OK)
     panic("interrupt platform");
-  __atomic_store_n(&memory_ready, 1, __ATOMIC_RELEASE);
+  atomic_store_release(&memory_ready, 1);
   cpu_context_enter(kernel_ready);
 }

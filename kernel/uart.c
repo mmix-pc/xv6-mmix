@@ -125,15 +125,14 @@ uart_output_enter(void)
   uint32 expected;
 
   for (;;) {
-    if (__atomic_load_n(&panic_owner, __ATOMIC_ACQUIRE) != 0)
+    if (atomic_load_acquire(&panic_owner) != 0)
       for (;;)
         ;
     expected = 0;
-    if (__atomic_compare_exchange_n(&output_owner, &expected, current, 0,
-                                    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
-      if (__atomic_load_n(&panic_owner, __ATOMIC_ACQUIRE) == 0)
+    if (atomic_cas_acquire(&output_owner, &expected, current)) {
+      if (atomic_load_acquire(&panic_owner) == 0)
         return;
-      __atomic_store_n(&output_owner, 0, __ATOMIC_RELEASE);
+      atomic_store_release(&output_owner, 0);
     }
   }
 }
@@ -141,7 +140,7 @@ uart_output_enter(void)
 static void
 uart_output_leave(void)
 {
-  __atomic_store_n(&output_owner, 0, __ATOMIC_RELEASE);
+  atomic_store_release(&output_owner, 0);
 }
 
 // Adopt the UART state established by early_uart_init(). Interrupts stay
@@ -170,7 +169,7 @@ uartinit(void)
 
   uart_write(UART_IER, 0);
   initlock(&tx_lock, "uart");
-  __atomic_store_n(&tx_busy, 0, __ATOMIC_RELAXED);
+  atomic_store_relaxed(&tx_busy, 0);
   runtime_initialized = 1;
 }
 
@@ -197,8 +196,8 @@ uart_fail(char *message)
          (unsigned int)uart_read(UART_IER),
          (unsigned int)uart_read(UART_IIR),
          (unsigned int)uart_read(UART_LSR),
-         __atomic_load_n(&tx_busy, __ATOMIC_RELAXED),
-         __atomic_load_n(&output_owner, __ATOMIC_RELAXED));
+         atomic_load_relaxed(&tx_busy),
+         atomic_load_relaxed(&output_owner));
   panic(message);
 }
 
@@ -238,12 +237,12 @@ uartwrite(char buf[], int n)
     panic("uart write");
   acquire(&tx_lock);
   while (i < n) {
-    while (__atomic_load_n(&tx_busy, __ATOMIC_RELAXED))
+    while (atomic_load_relaxed(&tx_busy))
       sleep(&tx_chan, &tx_lock);
     uart_output_enter();
     uart_write(UART_THR, (uint8)buf[i++]);
     uart_output_leave();
-    __atomic_store_n(&tx_busy, 1, __ATOMIC_RELAXED);
+    atomic_store_relaxed(&tx_busy, 1);
   }
   release(&tx_lock);
 }
@@ -251,11 +250,11 @@ uartwrite(char buf[], int n)
 void
 uartputc_sync(int c)
 {
-  uint32 owner = __atomic_load_n(&panic_owner, __ATOMIC_ACQUIRE);
+  uint32 owner = atomic_load_acquire(&panic_owner);
 
   if (owner != 0) {
     if (owner != (uint32)cpuid() + 1 ||
-        __atomic_load_n(&panicked, __ATOMIC_ACQUIRE))
+        atomic_load_acquire(&panicked))
       for (;;)
         ;
     early_uart_putc(c);
@@ -263,7 +262,7 @@ uartputc_sync(int c)
   }
 
   push_off();
-  if (__atomic_load_n(&panicked, __ATOMIC_ACQUIRE))
+  if (atomic_load_acquire(&panicked))
     for (;;)
       ;
   uart_output_enter();
@@ -281,13 +280,12 @@ uartpanic(void)
   uint32 owner = (uint32)cpuid() + 1;
   uint32 expected = 0;
 
-  if (!__atomic_compare_exchange_n(&panic_owner, &expected, owner, 0,
-                                   __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE) &&
+  if (!atomic_cas_acq_rel(&panic_owner, &expected, owner) &&
       expected != owner)
     for (;;)
       ;
   early_uart_write(UART_IER, 0);
-  while (__atomic_load_n(&output_owner, __ATOMIC_ACQUIRE) != 0)
+  while (atomic_load_acquire(&output_owner) != 0)
     ;
   while ((early_uart_read(UART_LSR) & UART_LSR_THR_EMPTY) == 0)
     ;
@@ -309,7 +307,7 @@ uartintr(void)
         release(&tx_lock);
         uart_fail("uart transmit state");
       }
-      __atomic_store_n(&tx_busy, 0, __ATOMIC_RELAXED);
+      atomic_store_relaxed(&tx_busy, 0);
       wakeup(&tx_chan);
       release(&tx_lock);
     } else if (reason == UART_IIR_RX_READY || reason == UART_IIR_RX_TIMEOUT) {

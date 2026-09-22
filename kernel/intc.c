@@ -42,7 +42,7 @@ intc_configure(void)
   struct platform_uart_config uart;
   uint64 address;
 
-  if (__atomic_load_n(&intc_configured, __ATOMIC_ACQUIRE) != 0)
+  if (atomic_load_acquire(&intc_configured) != 0)
     return 1;
   if (cpuid() != BOOT_CPU_ID ||
       platform_intc_config(&config) != PLATFORM_OK)
@@ -76,14 +76,14 @@ intc_configure(void)
   intc_uart_irq = uart.interrupt;
   for (uint32 id = 0; id < cpu_count; id++)
     intc_timer_interrupts[id] = timer_interrupts[id];
-  __atomic_store_n(&intc_configured, 1, __ATOMIC_RELEASE);
+  atomic_store_release(&intc_configured, 1);
   return 1;
 }
 
 static int
 intc_config_valid(void)
 {
-  return __atomic_load_n(&intc_configured, __ATOMIC_ACQUIRE) != 0;
+  return atomic_load_acquire(&intc_configured) != 0;
 }
 
 static int
@@ -145,12 +145,11 @@ intc_affinity_valid(void)
   uint64 uart_owner;
   uint64 virtio_owner;
 
-  if (__atomic_load_n(&intc_affinity.generation, __ATOMIC_ACQUIRE) !=
+  if (atomic_load_acquire(&intc_affinity.generation) !=
       MMIX_INTC_AFFINITY_GENERATION)
     return 0;
-  uart_owner = __atomic_load_n(&intc_affinity.uart_owner, __ATOMIC_RELAXED);
-  virtio_owner = __atomic_load_n(&intc_affinity.virtio_owner,
-                                 __ATOMIC_RELAXED);
+  uart_owner = atomic_load_relaxed(&intc_affinity.uart_owner);
+  virtio_owner = atomic_load_relaxed(&intc_affinity.virtio_owner);
   return uart_owner == BOOT_CPU_ID &&
          virtio_owner == (cpu_count > 1 ? 1 : BOOT_CPU_ID) &&
          uart_owner < cpu_count && virtio_owner < cpu_count;
@@ -166,11 +165,9 @@ intc_current_owns(uint32 irq)
   if (irq == intc_timer_interrupts[id])
     return 1;
   if (irq == intc_uart_irq)
-    return __atomic_load_n(&intc_affinity.uart_owner,
-                           __ATOMIC_RELAXED) == id;
+    return atomic_load_relaxed(&intc_affinity.uart_owner) == id;
   if (irq != 0 && irq == intc_virtio_irq())
-    return __atomic_load_n(&intc_affinity.virtio_owner,
-                           __ATOMIC_RELAXED) == id;
+    return atomic_load_relaxed(&intc_affinity.virtio_owner) == id;
   return 0;
 }
 
@@ -211,18 +208,14 @@ intc_publish_affinity(void)
   uint64 enabled;
 
   if (cpuid() != BOOT_CPU_ID || !intc_current_valid() ||
-      __atomic_load_n(&intc_affinity.generation, __ATOMIC_RELAXED) != 0)
+      atomic_load_relaxed(&intc_affinity.generation) != 0)
     return MMIX_INTC_BAD_STATE;
   for (uint32 word = 0; word < INTC_WORD_COUNT; word++)
     if (intc_enabled(word, &enabled) != MMIX_INTC_OK || enabled != 0)
       return MMIX_INTC_BAD_STATE;
-  __atomic_store_n(&intc_affinity.uart_owner, BOOT_CPU_ID,
-                   __ATOMIC_RELAXED);
-  __atomic_store_n(&intc_affinity.virtio_owner,
-                   intc_cpu_count > 1 ? 1 : BOOT_CPU_ID,
-                   __ATOMIC_RELAXED);
-  __atomic_store_n(&intc_affinity.generation,
-                   MMIX_INTC_AFFINITY_GENERATION, __ATOMIC_RELEASE);
+  atomic_store_relaxed(&intc_affinity.uart_owner, BOOT_CPU_ID);
+  atomic_store_relaxed(&intc_affinity.virtio_owner, intc_cpu_count > 1 ? 1 : BOOT_CPU_ID);
+  atomic_store_release(&intc_affinity.generation, MMIX_INTC_AFFINITY_GENERATION);
   return MMIX_INTC_OK;
 }
 
@@ -233,7 +226,7 @@ intc_bind_virtio_irq(uint32 irq)
   uint32 count = platform_virtio_count();
 
   if (!intc_current_valid() || cpuid() != BOOT_CPU_ID || intr_get() ||
-      __atomic_load_n(&intc_affinity.generation, __ATOMIC_ACQUIRE) != 0 ||
+      atomic_load_acquire(&intc_affinity.generation) != 0 ||
       intc_virtio_irq() != 0)
     return MMIX_INTC_BAD_STATE;
   if (!intc_irq_valid(irq) || count == 0 || count > PLATFORM_VIRTIO_SLOTS)
@@ -242,7 +235,7 @@ intc_bind_virtio_irq(uint32 irq)
     if (platform_virtio_config(i, &config) != PLATFORM_OK)
       return MMIX_INTC_BAD_PLATFORM;
     if (config.interrupt == irq) {
-      __atomic_store_n(&intc_disk_irq, irq, __ATOMIC_RELEASE);
+      atomic_store_release(&intc_disk_irq, irq);
       return MMIX_INTC_OK;
     }
   }
@@ -252,7 +245,7 @@ intc_bind_virtio_irq(uint32 irq)
 uint32
 intc_virtio_irq(void)
 {
-  return __atomic_load_n(&intc_disk_irq, __ATOMIC_ACQUIRE);
+  return atomic_load_acquire(&intc_disk_irq);
 }
 
 int
@@ -321,10 +314,9 @@ intc_shared_owner(uint32 irq, uint32 *owner)
   if (!intc_config_valid() || !intc_affinity_valid())
     return MMIX_INTC_BAD_PLATFORM;
   if (irq == intc_uart_irq)
-    selected = __atomic_load_n(&intc_affinity.uart_owner, __ATOMIC_RELAXED);
+    selected = atomic_load_relaxed(&intc_affinity.uart_owner);
   else if (irq != 0 && irq == intc_virtio_irq())
-    selected = __atomic_load_n(&intc_affinity.virtio_owner,
-                               __ATOMIC_RELAXED);
+    selected = atomic_load_relaxed(&intc_affinity.virtio_owner);
   else
     return MMIX_INTC_BAD_IRQ;
   if (selected >= intc_cpu_count)

@@ -1,6 +1,7 @@
 // Mutual exclusion spin locks.
 
 #include "types.h"
+#include "atomic.h"
 #include "param.h"
 #include "memlayout.h"
 #include "spinlock.h"
@@ -28,13 +29,13 @@ acquire(struct spinlock *lk)
   if (holding(lk))
     panic("acquire");
 
-  // Passing __ATOMIC_ACQUIRE to __atomic_exchange_n tells
+  // Passing __ATOMIC_ACQUIRE to atomic_exchange_acquire tells
   // the C compiler and the processor to not move loads or stores
   // past this point, to ensure that the critical section's memory
   // references happen strictly after the lock is acquired.
   // On MMIX, Clang lowers the tetra exchange to a CSWAP loop over the
   // containing octa and emits SYNC 3 after the exchange succeeds.
-  while (__atomic_exchange_n(&lk->locked, 1, __ATOMIC_ACQUIRE) != 0)
+  while (atomic_exchange_acquire(&lk->locked, 1) != 0)
     ;
 
   // Record info about lock acquisition for holding() and debugging.
@@ -56,14 +57,14 @@ release(struct spinlock *lk)
   // implies that an assignment might be implemented with
   // multiple store instructions.
   //
-  // The __ATOMIC_RELEASE argument to __atomic_store_n tells the
+  // The __ATOMIC_RELEASE argument to atomic_store_release tells the
   // the C compiler and the CPU to not move loads or stores past
   // this point, to ensure that all the stores in the critical
   // section are visible to other CPUs before the lock is released,
   // and that loads in the critical section occur strictly before
   // the lock is released.
   // On MMIX, Clang emits SYNC 3 before the CSWAP loop that updates the tetra.
-  __atomic_store_n(&lk->locked, 0, __ATOMIC_RELEASE);
+  atomic_store_release(&lk->locked, 0);
 
   pop_off();
 }

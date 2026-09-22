@@ -197,22 +197,20 @@ proc_vm_tracking_valid_locked(struct proc *p)
   if (p == 0 || !holding(&p->lock) || cpu_count == 0 || cpu_count > NCPU)
     panic("vm tracking");
   valid_cpus = (1ULL << cpu_count) - 1;
-  residents = __atomic_load_n(&p->vm_resident_cpus, __ATOMIC_RELAXED);
+  residents = atomic_load_relaxed(&p->vm_resident_cpus);
   if (p->vm_owner_cpu < -1 ||
       (p->vm_owner_cpu >= 0 && (uint64)p->vm_owner_cpu >= cpu_count) ||
       (residents & ~valid_cpus) != 0)
     panic("vm residents");
   for (uint64 cpu_id = 0; cpu_id < cpu_count; cpu_id++) {
-    uint64 generation = __atomic_load_n(&p->vm_cpu_generation[cpu_id],
-                                         __ATOMIC_RELAXED);
+    uint64 generation = atomic_load_relaxed(&p->vm_cpu_generation[cpu_id]);
 
     if (generation > p->vm_generation ||
         ((residents & (1ULL << cpu_id)) != 0 && generation == 0))
       panic("vm CPU generation");
   }
   for (uint64 cpu_id = cpu_count; cpu_id < NCPU; cpu_id++)
-    if (__atomic_load_n(&p->vm_cpu_generation[cpu_id],
-                        __ATOMIC_RELAXED) != 0)
+    if (atomic_load_relaxed(&p->vm_cpu_generation[cpu_id]) != 0)
       panic("vm offline generation");
 }
 
@@ -263,7 +261,7 @@ proc_vm_invalidate_target(uint64 generation)
   uint64 va;
   int id = cpuid();
 
-  active = __atomic_load_n(&vm_shootdown.active, __ATOMIC_ACQUIRE);
+  active = atomic_load_acquire(&vm_shootdown.active);
   if (generation == 0 || active != generation || id < 0 || id >= NCPU ||
       (vm_shootdown.targets & (1ULL << id)) == 0 ||
       vm_shootdown.pagetable == 0 ||
@@ -278,8 +276,7 @@ proc_vm_invalidate_target(uint64 generation)
       (vm_shootdown.operation == VM_SHOOTDOWN_RETIRE &&
        (vm_shootdown.start != 0 || vm_shootdown.end != 0 ||
         vm_shootdown.classes != VM_INVALIDATE_ALL)) ||
-      __atomic_load_n(&vm_shootdown.acknowledged[id],
-                      __ATOMIC_RELAXED) != 0)
+      atomic_load_relaxed(&vm_shootdown.acknowledged[id]) != 0)
     return -1;
 
   p = vm_shootdown.process;
@@ -297,9 +294,8 @@ proc_vm_invalidate_target(uint64 generation)
   mmix_sync_translation();
   if ((result & ~VM_INVALIDATE_ALL) != 0)
     return -1;
-  __atomic_store_n(&vm_shootdown.result[id], result, __ATOMIC_RELAXED);
-  __atomic_store_n(&vm_shootdown.acknowledged[id], generation,
-                   __ATOMIC_RELEASE);
+  atomic_store_relaxed(&vm_shootdown.result[id], result);
+  atomic_store_release(&vm_shootdown.acknowledged[id], generation);
   return 0;
 }
 
@@ -369,7 +365,7 @@ proc_vm_commit_locked(struct proc *p, uint64 operation, uint64 start,
     panic("vm invalidation");
 
   active_cpus = platform_cpu_mask();
-  targets = __atomic_load_n(&p->vm_resident_cpus, __ATOMIC_RELAXED);
+  targets = atomic_load_relaxed(&p->vm_resident_cpus);
   if ((targets & ~active_cpus) != 0)
     panic("vm shootdown targets");
   generation = vm_shootdown.generation + 1;
@@ -387,7 +383,7 @@ proc_vm_commit_locked(struct proc *p, uint64 operation, uint64 start,
   vm_shootdown.end = end;
   vm_shootdown.classes = classes;
   vm_shootdown.targets = targets;
-  __atomic_store_n(&vm_shootdown.active, generation, __ATOMIC_RELEASE);
+  atomic_store_release(&vm_shootdown.active, generation);
 
   // A remote scheduler may be spinning on this process lock with interrupts
   // masked. Keep this CPU non-preemptible, but release the lock before waiting
@@ -410,8 +406,7 @@ proc_vm_commit_locked(struct proc *p, uint64 operation, uint64 start,
     for (uint32 target = 0; target < platform_cpu_count(); target++) {
       if ((remote & (1ULL << target)) == 0)
         continue;
-      if (__atomic_load_n(&vm_shootdown.acknowledged[target],
-                          __ATOMIC_ACQUIRE) == generation &&
+      if (atomic_load_acquire(&vm_shootdown.acknowledged[target]) == generation &&
           ipi_work_acknowledged(target, MMIX_IPI_WORK_TRANSLATION,
                                 generation, &acknowledged) == MMIX_IPI_OK &&
           acknowledged)
@@ -437,8 +432,8 @@ proc_vm_commit_locked(struct proc *p, uint64 operation, uint64 start,
   } else if ((targets & local) != 0) {
     mycpu()->user_translation = proc_vm_state(p);
   }
-  __atomic_store_n(&vm_shootdown.completed, generation, __ATOMIC_RELEASE);
-  __atomic_store_n(&vm_shootdown.active, 0, __ATOMIC_RELEASE);
+  atomic_store_release(&vm_shootdown.completed, generation);
+  atomic_store_release(&vm_shootdown.active, 0);
   release(&p->lock);
   pop_off();
   releasesleep(&vm_shootdown_lock);
@@ -552,17 +547,15 @@ proc_vm_prepare_user(struct proc *p)
   generation = p->vm_generation;
   resident_bit = 1ULL << cpu_id;
 
-  if (__atomic_load_n(&p->vm_cpu_generation[cpu_id],
-                      __ATOMIC_RELAXED) != generation) {
+  if (atomic_load_relaxed(&p->vm_cpu_generation[cpu_id]) != generation) {
     // Establish local freshness before user entry. The resident set records
     // which other CPUs may require invalidation after a live mapping change.
     mmix_rv_publish(MMIX_KERNEL_RV);
     if (mmix_rv_read() != MMIX_KERNEL_RV)
       panic("vm invalidate");
-    __atomic_store_n(&p->vm_cpu_generation[cpu_id], generation,
-                     __ATOMIC_RELAXED);
+    atomic_store_relaxed(&p->vm_cpu_generation[cpu_id], generation);
   }
-  __atomic_fetch_or(&p->vm_resident_cpus, resident_bit, __ATOMIC_RELAXED);
+  atomic_fetch_or_relaxed(&p->vm_resident_cpus, resident_bit);
   c->user_translation = state;
   release(&p->lock);
 }
